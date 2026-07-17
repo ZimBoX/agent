@@ -1,0 +1,32 @@
+<Application
+    x:Class="ClaudeAssistant.Client.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Палитра — по мотивам логотипа (синий флаг/самолётик) и Figma-набросков:
+                 минималистичный бело-серый интерфейс с одним синим акцентом. -->
+            <Color x:Key="AppAccentColor">#1B69B2</Color>
+            <SolidColorBrush x:Key="AppAccentBrush" Color="{StaticResource AppAccentColor}" />
+            <SolidColorBrush x:Key="AppCardBackgroundBrush" Color="#F7F7F8" />
+            <SolidColorBrush x:Key="AppBorderBrush" Color="#E5E5E7" />
+            <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#1A1A1A" />
+            <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#8A8A93" />
+
+            <!-- Переопределяем системный акцент, чтобы ProgressRing/фокус-рамки и
+                 прочие "родные" акцентные элементы WinUI сами подхватили наш синий,
+                 без ручной перестилизации каждого контрола. -->
+            <Color x:Key="SystemAccentColor">#1B69B2</Color>
+            <Color x:Key="SystemAccentColorLight1">#2E7AC4</Color>
+            <Color x:Key="SystemAccentColorLight2">#4E90D0</Color>
+            <Color x:Key="SystemAccentColorLight3">#7CACDC</Color>
+            <Color x:Key="SystemAccentColorDark1">#155A97</Color>
+            <Color x:Key="SystemAccentColorDark2">#104A7C</Color>
+            <Color x:Key="SystemAccentColorDark3">#0C3A61</Color>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

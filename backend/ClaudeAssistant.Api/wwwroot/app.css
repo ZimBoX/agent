@@ -1,0 +1,258 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: #17171b;
+    color: #e6e6ea;
+    margin: 0;
+}
+
+.admin-shell {
+    display: flex;
+    min-height: 100vh;
+}
+
+nav {
+    width: 220px;
+    flex-shrink: 0;
+    background: #1e1e24;
+    padding: 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    border-right: 1px solid #2c2c34;
+}
+
+nav .brand {
+    font-weight: 700;
+    font-size: 1.05rem;
+    margin-bottom: 1.25rem;
+    color: #fff;
+    letter-spacing: 0.01em;
+}
+
+nav a {
+    color: #b7b7c2;
+    text-decoration: none;
+    padding: 0.55rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.92rem;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+nav a:hover {
+    background: #29293300;
+    background: #26262e;
+    color: #fff;
+}
+
+nav a.active {
+    background: #6b4ce6;
+    color: #fff;
+}
+
+.logout-form {
+    margin-top: auto;
+}
+
+.logout-form button {
+    width: 100%;
+    background: transparent;
+    border: 1px solid #3a3a44;
+    color: #b7b7c2;
+}
+
+.logout-form button:hover {
+    background: #26262e;
+    color: #fff;
+}
+
+main {
+    flex: 1;
+    padding: 2.5rem 3rem;
+    max-width: 1000px;
+}
+
+h2 {
+    font-weight: 650;
+    font-size: 1.5rem;
+    margin: 0 0 0.3rem;
+    color: #fff;
+}
+
+h3 {
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin: 1.75rem 0 0.75rem;
+    color: #dcdce2;
+}
+
+main > p {
+    color: #9a9aa5;
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0 1.5rem;
+    background: #1e1e24;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #2c2c34;
+}
+
+th {
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    background: #26262e;
+    color: #9a9aa5;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+td {
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+    border-top: 1px solid #2c2c34;
+    font-size: 0.92rem;
+}
+
+tbody tr:hover {
+    background: #24242b;
+}
+
+input,
+select,
+textarea {
+    background: #1e1e24;
+    border: 1px solid #3a3a44;
+    color: #e6e6ea;
+    border-radius: 6px;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.92rem;
+    font-family: inherit;
+    margin-right: 0.5rem;
+    margin-bottom: 0.6rem;
+    transition: border-color 0.12s ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: #6b4ce6;
+}
+
+textarea {
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    resize: vertical;
+    line-height: 1.4;
+}
+
+button {
+    background: #6b4ce6;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    font-size: 0.88rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.05s ease;
+}
+
+button:hover {
+    background: #7d5ff0;
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+/* Кнопки "Удалить"/"Отозвать" в таблицах — визуально приглушённее основного
+   действия, чтобы форма создания оставалась главным акцентом на странице. */
+td button,
+.row-actions button {
+    background: transparent;
+    border: 1px solid #3a3a44;
+    color: #b7b7c2;
+}
+
+td button:hover,
+.row-actions button:hover {
+    background: #33333d;
+    color: #fff;
+}
+
+.error {
+    color: #f28b82;
+    font-size: 0.88rem;
+    margin: 0.5rem 0;
+}
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+a {
+    color: #a78bfa;
+}
+
+form.template-form {
+    background: #1e1e24;
+    border: 1px solid #2c2c34;
+    border-radius: 8px;
+    padding: 1.25rem;
+    max-width: 660px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+form.template-form input,
+form.template-form select {
+    margin-right: 0;
+    max-width: 100%;
+}
+
+.role-checkbox-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    background: #17171b;
+    border: 1px solid #2c2c34;
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.6rem;
+}
+
+.role-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.role-checkbox input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+.admin-badge {
+    font-size: 0.72rem;
+    color: #a78bfa;
+    background: #2c2438;
+    border-radius: 4px;
+    padding: 0.05rem 0.4rem;
+}

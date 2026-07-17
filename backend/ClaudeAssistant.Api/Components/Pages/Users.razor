@@ -1,0 +1,129 @@
+@page "/admin"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+@inject IJSRuntime JS
+
+<h2>Сотрудники</h2>
+
+<form @onsubmit="CreateUserAsync" @onsubmit:preventDefault>
+    <input @bind="_newFullName" placeholder="ФИО" required />
+    @if (_roles is not null && _roles.Count == 0)
+    {
+        <span>Сначала добавьте хотя бы одну <a href="/admin/roles">должность</a></span>
+    }
+    else
+    {
+        <select @bind="_newRole" required>
+            <option value="">Должность...</option>
+            @if (_roles is not null)
+            {
+                @foreach (var role in _roles)
+                {
+                    <option value="@role.Name">@role.Name</option>
+                }
+            }
+        </select>
+    }
+    <button type="submit">Создать</button>
+</form>
+
+@if (_users is null)
+{
+    <p>Загрузка...</p>
+}
+else if (_users.Count == 0)
+{
+    <p>Сотрудников пока нет.</p>
+}
+else
+{
+    <table>
+        <thead>
+        <tr>
+            <th>ФИО</th>
+            <th>Должность</th>
+            <th>Создан</th>
+            <th>Привязка устройства</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var entry in _users)
+        {
+            <tr>
+                <td>@entry.User.FullName</td>
+                <td>@entry.User.Role</td>
+                <td>@entry.User.CreatedAt.LocalDateTime.ToString("dd.MM.yyyy HH:mm")</td>
+                <td>
+                    @if (entry.ActiveDeviceCount == 0)
+                    {
+                        <span>нет активной</span>
+                    }
+                    else
+                    {
+                        <span>
+                            активна
+                            @(entry.LastSeenAt is null ? "" : $" (была активна {entry.LastSeenAt.Value.LocalDateTime:dd.MM HH:mm})")
+                        </span>
+                    }
+                </td>
+                <td class="row-actions">
+                    <a href="@($"/admin/users/{entry.User.Id}")">Подробнее</a>
+                    @if (entry.ActiveDeviceCount > 0)
+                    {
+                        <button @onclick="() => RevokeAllAsync(entry.User.Id)">Отозвать привязку</button>
+                    }
+                    <button @onclick="() => DeleteUserAsync(entry.User.Id, entry.User.FullName)">Удалить</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<AdminService.UserWithDeviceSummary>? _users;
+    private List<Role>? _roles;
+    private string _newFullName = "";
+    private string _newRole = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _users = await AdminService.ListUsersWithDeviceSummaryAsync();
+        _roles = await AdminService.ListRolesAsync();
+    }
+
+    private async Task CreateUserAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newFullName) || string.IsNullOrWhiteSpace(_newRole))
+        {
+            return;
+        }
+
+        await AdminService.CreateUserAsync(_newFullName.Trim(), _newRole.Trim());
+        _newFullName = "";
+        _newRole = "";
+        _users = await AdminService.ListUsersWithDeviceSummaryAsync();
+    }
+
+    private async Task RevokeAllAsync(Guid userId)
+    {
+        await AdminService.RevokeAllDevicesAsync(userId);
+        _users = await AdminService.ListUsersWithDeviceSummaryAsync();
+    }
+
+    private async Task DeleteUserAsync(Guid userId, string fullName)
+    {
+        var confirmed = await JS.InvokeAsync<bool>(
+            "confirm",
+            $"Удалить сотрудника «{fullName}»? Это удалит его устройства и историю запросов безвозвратно."
+        );
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await AdminService.DeleteUserAsync(userId);
+        _users = await AdminService.ListUsersWithDeviceSummaryAsync();
+    }
+}

@@ -1,0 +1,71 @@
+@page "/admin/releases"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+
+<h2>Релизы</h2>
+
+<h3>Загрузить новый билд</h3>
+<p>Zip-архив с содержимым папки, которую производит <code>vpk pack</code>
+    (Setup.exe, RELEASES, *.nupkg).</p>
+<form method="post" action="/api/admin/releases/upload" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".zip" required />
+    <button type="submit">Загрузить</button>
+</form>
+
+<h3>Доступные версии</h3>
+@if (_errorMessage is not null)
+{
+    <p class="error">@_errorMessage</p>
+}
+
+@if (_versions is null)
+{
+    <p>Загрузка...</p>
+}
+else if (_versions.Count == 0)
+{
+    <p>Релизов пока нет.</p>
+}
+else
+{
+    <table>
+        <thead>
+        <tr>
+            <th>Версия</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var version in _versions)
+        {
+            <tr>
+                <td>@version</td>
+                <td><button @onclick="() => RetractAsync(version)">Отозвать (откатить клиентов)</button></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<string>? _versions;
+    private string? _errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _versions = await AdminService.ListReleaseVersionsAsync();
+    }
+
+    private async Task RetractAsync(string version)
+    {
+        _errorMessage = null;
+        var outcome = await AdminService.RetractReleaseAsync(version);
+        _errorMessage = outcome switch
+        {
+            AdminService.RetractOutcome.LastRemainingVersion => "Нельзя отозвать единственную оставшуюся версию.",
+            AdminService.RetractOutcome.VersionNotFound => "Версия не найдена в фиде.",
+            _ => null,
+        };
+        _versions = await AdminService.ListReleaseVersionsAsync();
+    }
+}

@@ -1,0 +1,193 @@
+@page "/admin/templates"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+@inject IJSRuntime JS
+
+<h2>Шаблоны</h2>
+
+@if (_roles is not null && _roles.Count == 0)
+{
+    <p>Сначала добавьте хотя бы одну <a href="/admin/roles">должность</a> — без неё шаблон
+        некому будет показать.</p>
+}
+else
+{
+    <h3>@(_editingId is null ? "Новый шаблон" : "Редактирование шаблона")</h3>
+    <form @onsubmit="SaveAsync" @onsubmit:preventDefault class="template-form">
+        <input @bind="_title" placeholder="Название" required />
+
+        <div class="role-checkbox-list">
+            @if (_roles is not null)
+            {
+                @foreach (var role in _roles)
+                {
+                    <label class="role-checkbox">
+                        <input type="checkbox" checked="@_selectedRoleIds.Contains(role.Id)"
+                               @onchange="@(e => ToggleRole(role.Id, (bool)e.Value!))" />
+                        @role.Name
+                        @if (role.IsAdmin)
+                        {
+                            <span class="admin-badge">видит все</span>
+                        }
+                    </label>
+                }
+            }
+        </div>
+
+        <input @bind="_model" placeholder="Модель (напр. claude-sonnet-5)" required />
+        <textarea @bind="_systemPrompt" placeholder="Системный промпт — используйте {{document_text}} как место для текста документа" rows="8" required></textarea>
+        <label class="role-checkbox">
+            <input type="checkbox" @bind="_allowFileSearch" />
+            Разрешить поиск по папке объекта (модель сможет сама просматривать и читать
+            файлы в выбранной пользователем папке объекта)
+        </label>
+        <div class="row-actions">
+            <button type="submit">@(_editingId is null ? "Создать" : "Сохранить")</button>
+            @if (_editingId is not null)
+            {
+                <button type="button" @onclick="ResetForm">Отмена</button>
+            }
+        </div>
+    </form>
+
+    @if (_errorMessage is not null)
+    {
+        <p class="error">@_errorMessage</p>
+    }
+}
+
+@if (_templates is null)
+{
+    <p>Загрузка...</p>
+}
+else if (_templates.Count > 0)
+{
+    <table>
+        <thead>
+        <tr>
+            <th>Название</th>
+            <th>Должности</th>
+            <th>Модель</th>
+            <th>Версия</th>
+            <th>Поиск по объекту</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var template in _templates)
+        {
+            <tr>
+                <td>@template.Title</td>
+                <td>@string.Join(", ", template.Roles.Select(r => r.Name))</td>
+                <td>@template.Model</td>
+                <td>@template.Version</td>
+                <td>@(template.AllowFileSearch ? "да" : "")</td>
+                <td class="row-actions">
+                    <button @onclick="() => EditAsync(template.Id)">Изменить</button>
+                    <button @onclick="() => DeleteAsync(template.Id, template.Title)">Удалить</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<Template>? _templates;
+    private List<Role>? _roles;
+    private Guid? _editingId;
+    private string _title = "";
+    private readonly HashSet<Guid> _selectedRoleIds = [];
+    private string _model = "claude-sonnet-5";
+    private string _systemPrompt = "";
+    private bool _allowFileSearch;
+    private string? _errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _templates = await AdminService.ListTemplatesAsync();
+        _roles = await AdminService.ListRolesAsync();
+    }
+
+    private void ToggleRole(Guid roleId, bool isChecked)
+    {
+        if (isChecked)
+        {
+            _selectedRoleIds.Add(roleId);
+        }
+        else
+        {
+            _selectedRoleIds.Remove(roleId);
+        }
+    }
+
+    private void ResetForm()
+    {
+        _editingId = null;
+        _title = "";
+        _selectedRoleIds.Clear();
+        _model = "claude-sonnet-5";
+        _systemPrompt = "";
+        _allowFileSearch = false;
+        _errorMessage = null;
+    }
+
+    private async Task EditAsync(Guid templateId)
+    {
+        var template = await AdminService.GetTemplateAsync(templateId);
+        if (template is null)
+        {
+            return;
+        }
+
+        _editingId = template.Id;
+        _title = template.Title;
+        _selectedRoleIds.Clear();
+        foreach (var role in template.Roles)
+        {
+            _selectedRoleIds.Add(role.Id);
+        }
+        _model = template.Model;
+        _systemPrompt = template.SystemPrompt;
+        _allowFileSearch = template.AllowFileSearch;
+        _errorMessage = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_title) || _selectedRoleIds.Count == 0 || string.IsNullOrWhiteSpace(_systemPrompt) || string.IsNullOrWhiteSpace(_model))
+        {
+            _errorMessage = _selectedRoleIds.Count == 0 ? "Отметьте хотя бы одну должность" : null;
+            return;
+        }
+
+        var roleIds = _selectedRoleIds.ToList();
+        if (_editingId is null)
+        {
+            await AdminService.CreateTemplateAsync(_title.Trim(), roleIds, _systemPrompt.Trim(), _model.Trim(), _allowFileSearch);
+        }
+        else
+        {
+            await AdminService.UpdateTemplateAsync(_editingId.Value, _title.Trim(), roleIds, _systemPrompt.Trim(), _model.Trim(), _allowFileSearch);
+        }
+
+        ResetForm();
+        _templates = await AdminService.ListTemplatesAsync();
+    }
+
+    private async Task DeleteAsync(Guid templateId, string title)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Удалить шаблон «{title}»?");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var outcome = await AdminService.DeleteTemplateAsync(templateId);
+        _errorMessage = outcome == AdminService.DeleteTemplateOutcome.InUse
+            ? "Шаблон уже использовался в запросах — удаление недоступно"
+            : null;
+
+        _templates = await AdminService.ListTemplatesAsync();
+    }
+}

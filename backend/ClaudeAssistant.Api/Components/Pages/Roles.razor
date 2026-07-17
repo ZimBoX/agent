@@ -1,0 +1,115 @@
+@page "/admin/roles"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+@inject IJSRuntime JS
+
+<h2>Должности</h2>
+<p>Управляемый список должностей — источник для выпадающих списков при создании
+    сотрудника и привязке шаблона, чтобы не плодить опечатки вроде "юрист"/"Юрист".</p>
+
+<form @onsubmit="CreateRoleAsync" @onsubmit:preventDefault>
+    <input @bind="_newName" placeholder="Название должности" required />
+    <label class="role-checkbox">
+        <input type="checkbox" @bind="_newIsAdmin" />
+        Полный доступ ко всем шаблонам
+    </label>
+    <button type="submit">Добавить</button>
+</form>
+
+@if (_errorMessage is not null)
+{
+    <p class="error">@_errorMessage</p>
+}
+
+@if (_roles is null)
+{
+    <p>Загрузка...</p>
+}
+else if (_roles.Count == 0)
+{
+    <p>Должностей пока нет — без них список у сотрудников и шаблонов будет пустым.</p>
+}
+else
+{
+    <table>
+        <thead>
+        <tr>
+            <th>Название</th>
+            <th>Полный доступ ко всем шаблонам</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var role in _roles)
+        {
+            <tr>
+                <td>@role.Name</td>
+                <td>
+                    <label class="role-checkbox">
+                        <input type="checkbox" checked="@role.IsAdmin"
+                               @onchange="@(e => ToggleIsAdminAsync(role, (bool)e.Value!))" />
+                    </label>
+                </td>
+                <td><button @onclick="() => DeleteRoleAsync(role.Id, role.Name)">Удалить</button></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<Role>? _roles;
+    private string _newName = "";
+    private bool _newIsAdmin;
+    private string? _errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _roles = await AdminService.ListRolesAsync();
+    }
+
+    private async Task CreateRoleAsync()
+    {
+        _errorMessage = null;
+        var name = _newName.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        var (outcome, _) = await AdminService.CreateRoleAsync(name, _newIsAdmin);
+        if (outcome == AdminService.CreateRoleOutcome.AlreadyExists)
+        {
+            _errorMessage = "Такая должность уже есть";
+        }
+        else
+        {
+            _newName = "";
+            _newIsAdmin = false;
+        }
+
+        _roles = await AdminService.ListRolesAsync();
+    }
+
+    private async Task ToggleIsAdminAsync(Role role, bool isAdmin)
+    {
+        await AdminService.UpdateRoleIsAdminAsync(role.Id, isAdmin);
+        role.IsAdmin = isAdmin;
+    }
+
+    private async Task DeleteRoleAsync(Guid roleId, string name)
+    {
+        var confirmed = await JS.InvokeAsync<bool>(
+            "confirm",
+            $"Удалить должность «{name}»? У уже существующих сотрудников должность останется как есть (это просто " +
+            "строка), а вот из шаблонов, которые были на неё завязаны, она будет отвязана."
+        );
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await AdminService.DeleteRoleAsync(roleId);
+        _roles = await AdminService.ListRolesAsync();
+    }
+}

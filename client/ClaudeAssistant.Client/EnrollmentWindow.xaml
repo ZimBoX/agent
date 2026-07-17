@@ -1,0 +1,13 @@
+<Window
+    x:Class="ClaudeAssistant.Client.EnrollmentWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Padding="24" Spacing="12" HorizontalAlignment="Center" VerticalAlignment="Center" Width="320">
+        <TextBlock Text="Привязка устройства" FontSize="20" FontWeight="SemiBold" />
+        <TextBlock Text="Введите код привязки, полученный от администратора" TextWrapping="Wrap" />
+        <TextBox x:Name="CodeInput" PlaceholderText="Код привязки" AutomationProperties.AutomationId="CodeInput" />
+        <Button x:Name="BindButton" Content="Привязать" Click="OnBindClick" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="BindButton" />
+        <TextBlock x:Name="StatusText" TextWrapping="Wrap" AutomationProperties.AutomationId="StatusText" />
+    </StackPanel>
+</Window>

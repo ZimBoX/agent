@@ -1,0 +1,17 @@
+@inherits LayoutComponentBase
+
+<div class="admin-shell">
+    <nav>
+        <div class="brand">Claude Assistant</div>
+        <NavLink href="/admin" Match="NavLinkMatch.All">Сотрудники</NavLink>
+        <NavLink href="/admin/roles">Должности</NavLink>
+        <NavLink href="/admin/templates">Шаблоны</NavLink>
+        <NavLink href="/admin/releases">Релизы</NavLink>
+        <form method="post" action="/admin/logout" class="logout-form">
+            <button type="submit">Выйти</button>
+        </form>
+    </nav>
+    <main>
+        @Body
+    </main>
+</div>

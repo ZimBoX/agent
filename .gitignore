@@ -1,0 +1,23 @@
+## .NET
+bin/
+obj/
+*.user
+.vs/
+
+## Rider/VS Code
+.idea/
+.vscode/
+
+## Publish/build output
+publish/
+*.pdb
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Release artifacts (large binaries, not source)
+releases-local/
+release-v1.zip
+release-v2.zip
+*.zip

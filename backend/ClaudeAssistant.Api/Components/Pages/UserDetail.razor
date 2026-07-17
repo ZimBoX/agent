@@ -1,0 +1,89 @@
+@page "/admin/users/{Id:guid}"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+
+<p><a href="/admin">&larr; К списку сотрудников</a></p>
+
+@if (_user is null)
+{
+    <p>Сотрудник не найден.</p>
+}
+else
+{
+    <h2>@_user.FullName</h2>
+    <p>@_user.Role</p>
+
+    <h3>Привязка устройства</h3>
+    <button @onclick="GenerateCodeAsync">Сгенерировать код привязки</button>
+    @if (_lastCode is not null)
+    {
+        <p>Код: <strong>@_lastCode.Code</strong> (действует до @_lastCode.ExpiresAt.LocalDateTime.ToString("HH:mm:ss"))</p>
+    }
+
+    <h3>Устройства</h3>
+    @if (_devices is null)
+    {
+        <p>Загрузка...</p>
+    }
+    else if (_devices.Count == 0)
+    {
+        <p>Устройств пока нет.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+            <tr>
+                <th>Привязано</th>
+                <th>Последняя активность</th>
+                <th>Статус</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var device in _devices)
+            {
+                <tr>
+                    <td>@device.CreatedAt.LocalDateTime.ToString("dd.MM.yyyy HH:mm")</td>
+                    <td>@(device.LastSeenAt is null ? "—" : device.LastSeenAt.Value.LocalDateTime.ToString("dd.MM.yyyy HH:mm"))</td>
+                    <td>@(device.RevokedAt is null ? "активно" : $"отозвано {device.RevokedAt.Value.LocalDateTime:dd.MM.yyyy HH:mm}")</td>
+                    <td>
+                        @if (device.RevokedAt is null)
+                        {
+                            <button @onclick="() => RevokeDeviceAsync(device.Id)">Отозвать</button>
+                        }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private User? _user;
+    private List<Device>? _devices;
+    private EnrollmentCode? _lastCode;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _user = await AdminService.GetUserAsync(Id);
+        if (_user is not null)
+        {
+            _devices = await AdminService.ListDevicesAsync(Id);
+        }
+    }
+
+    private async Task GenerateCodeAsync()
+    {
+        _lastCode = await AdminService.CreateEnrollmentCodeAsync(Id);
+    }
+
+    private async Task RevokeDeviceAsync(Guid deviceId)
+    {
+        await AdminService.RevokeDeviceAsync(deviceId);
+        _devices = await AdminService.ListDevicesAsync(Id);
+    }
+}

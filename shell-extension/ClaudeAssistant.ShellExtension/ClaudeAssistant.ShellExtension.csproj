@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>ClaudeAssistant.ShellExtension</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!-- Ключевая настройка: SDK генерирует нативный *.comhost.dll — именно его
+         регистрирует regsvr32, он и грузит .NET-рантайм внутрь explorer.exe. -->
+    <EnableComHosting>true</EnableComHosting>
+  </PropertyGroup>
+
+</Project>
