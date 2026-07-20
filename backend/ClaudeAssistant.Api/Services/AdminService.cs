@@ -275,9 +275,9 @@ public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub)
         return true;
     }
 
-    public async Task<List<string>> ListReleaseVersionsAsync()
+    public async Task<List<string>> ListReleaseVersionsAsync(string channel = "win")
     {
-        var feedPath = Path.Combine(Program.ReleasesPath, "releases.win.json");
+        var feedPath = Path.Combine(Program.ReleasesPath, $"releases.{channel}.json");
         if (!File.Exists(feedPath))
         {
             return [];
@@ -322,12 +322,14 @@ public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub)
         LastRemainingVersion,
     }
 
-    // Убирает версию из releases.win.json (файлы пакетов не удаляет — можно откатить
-    // обратно). Клиент откатится сам, только если у него включён AllowVersionDowngrade
-    // (см. UpdateService на клиенте) — штатный флаг Velopack именно под этот сценарий.
-    public async Task<RetractOutcome> RetractReleaseAsync(string version)
+    // Убирает версию из releases.<channel>.json (файлы пакетов не удаляет — можно
+    // откатить обратно). Клиент откатится сам, только если у него включён
+    // AllowVersionDowngrade (см. UpdateService на клиенте) — штатный флаг Velopack
+    // именно под этот сценарий. Каждый канал (win/beta/...) — отдельный независимый
+    // фид: "последняя оставшаяся версия" считается в пределах только своего канала.
+    public async Task<RetractOutcome> RetractReleaseAsync(string version, string channel = "win")
     {
-        var feedPath = Path.Combine(Program.ReleasesPath, "releases.win.json");
+        var feedPath = Path.Combine(Program.ReleasesPath, $"releases.{channel}.json");
         if (!File.Exists(feedPath))
         {
             return RetractOutcome.VersionNotFound;

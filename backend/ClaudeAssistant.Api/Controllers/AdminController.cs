@@ -161,12 +161,13 @@ public class AdminController(AdminService adminService) : ControllerBase
     }
 
     [HttpGet("releases")]
-    public async Task<ActionResult<List<string>>> ListReleases() => Ok(await adminService.ListReleaseVersionsAsync());
+    public async Task<ActionResult<List<string>>> ListReleases([FromQuery] string channel = "win") =>
+        Ok(await adminService.ListReleaseVersionsAsync(channel));
 
     [HttpPost("releases/{version}/retract")]
-    public async Task<IActionResult> RetractRelease(string version)
+    public async Task<IActionResult> RetractRelease(string version, [FromQuery] string channel = "win")
     {
-        var outcome = await adminService.RetractReleaseAsync(version);
+        var outcome = await adminService.RetractReleaseAsync(version, channel);
         return outcome switch
         {
             AdminService.RetractOutcome.Ok => NoContent(),

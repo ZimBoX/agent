@@ -13,6 +13,13 @@
 </form>
 
 <h3>Доступные версии</h3>
+<p>
+    Канал:
+    <select @bind="_channel" @bind:after="ReloadAsync">
+        <option value="win">Release</option>
+        <option value="beta">Beta</option>
+    </select>
+</p>
 @if (_errorMessage is not null)
 {
     <p class="error">@_errorMessage</p>
@@ -48,24 +55,27 @@ else
 }
 
 @code {
+    private string _channel = "win";
     private List<string>? _versions;
     private string? _errorMessage;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
     {
-        _versions = await AdminService.ListReleaseVersionsAsync();
+        _versions = await AdminService.ListReleaseVersionsAsync(_channel);
     }
 
     private async Task RetractAsync(string version)
     {
         _errorMessage = null;
-        var outcome = await AdminService.RetractReleaseAsync(version);
+        var outcome = await AdminService.RetractReleaseAsync(version, _channel);
         _errorMessage = outcome switch
         {
             AdminService.RetractOutcome.LastRemainingVersion => "Нельзя отозвать единственную оставшуюся версию.",
             AdminService.RetractOutcome.VersionNotFound => "Версия не найдена в фиде.",
             _ => null,
         };
-        _versions = await AdminService.ListReleaseVersionsAsync();
+        await ReloadAsync();
     }
 }
