@@ -1,12 +1,16 @@
 ﻿<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
 
-  <!-- Требуем права администратора всегда — установка регистрирует shell
-       extension (comhost.dll в реестре) и sparse MSIX-пакет (LocalMachine
-       trust store), обоим нужна элевация. Раньше пытались получить её изнутри
-       install-хука через программный Verb=runas — на практике ненадёжно
-       (UAC из фонового процесса не всегда успевал отрендериться). Манифест на
-       самом Setup.exe даёт стандартный щит + UAC-запрос при двойном клике. -->
+  <!-- Требуем права администратора для ЭТОГО лаунчера (не для самого
+       Velopack Setup.exe — патчить его готовый exe нельзя, см. Program.cs и
+       комментарий в csproj: инструменты вроде mt.exe при перезаписи ресурса
+       обрезают дописанную в конец файла полезную нагрузку Velopack).
+       Двойной клик по этому exe показывает щит UAC и передаёт повышенные
+       права дочернему процессу — настоящему Setup.exe, который запускается
+       уже из-под администратора. Само же приложение остаётся обычным
+       непривилегированным трей-процессом после установки — элевация нужна
+       только на время установки (регистрация shell extension в реестре и
+       sparse MSIX-пакета в LocalMachine). -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">

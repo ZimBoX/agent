@@ -15,6 +15,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "shell-extension", "shell-ex
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeAssistant.ShellExtension", "shell-extension\ClaudeAssistant.ShellExtension\ClaudeAssistant.ShellExtension.csproj", "{8477E190-F4F1-4C98-B58E-9A215BF248B7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ClaudeAssistant.Client.InstallerLauncher", "client\ClaudeAssistant.Client.InstallerLauncher\ClaudeAssistant.Client.InstallerLauncher.csproj", "{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -61,6 +63,18 @@ Global
 		{8477E190-F4F1-4C98-B58E-9A215BF248B7}.Release|x64.Build.0 = Release|x64
 		{8477E190-F4F1-4C98-B58E-9A215BF248B7}.Release|x86.ActiveCfg = Release|x64
 		{8477E190-F4F1-4C98-B58E-9A215BF248B7}.Release|x86.Build.0 = Release|x64
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Debug|x64.Build.0 = Debug|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Debug|x86.Build.0 = Debug|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Release|x64.ActiveCfg = Release|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Release|x64.Build.0 = Release|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Release|x86.ActiveCfg = Release|Any CPU
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -69,5 +83,6 @@ Global
 		{1C3688FD-E242-47B1-A67A-2F1C5A4EA1A6} = {C84E79D5-C56C-4D88-9360-C5684C4DD14D}
 		{00BC8D45-66B9-46AD-B266-33D8DF654178} = {8D8F7E49-4710-4BB1-94A8-1E731991D1B2}
 		{8477E190-F4F1-4C98-B58E-9A215BF248B7} = {93E9ADAC-A383-3AE7-C999-466799B84ACA}
+		{BAD9ADC6-9264-44A4-A714-FB33FBD8108A} = {8D8F7E49-4710-4BB1-94A8-1E731991D1B2}
 	EndGlobalSection
 EndGlobal

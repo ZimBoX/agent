@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Install ClaudeAssistant</AssemblyName>
+    <!-- Манифест встраивается штатным MSBuild-механизмом при сборке — не
+         пост-обработкой готового exe инструментом вроде mt.exe. Патчинг
+         УЖЕ собранного Velopack Setup.exe таким инструментом (через
+         -outputresource) на практике обрезает его: полезная нагрузка
+         Velopack дописана в конец PE-файла отдельным блоком, а запись
+         ресурса через стандартный Windows Resource API это не
+         сохраняет — известное ограничение API, не наша недоработка.
+         Поэтому вместо патчинга чужого бинарника — отдельный маленький
+         лаунчер с собственным манифестом, собранный с нуля. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+</Project>
