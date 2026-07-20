@@ -9,17 +9,22 @@
 
         <!-- Компактный вид — набор запроса: шаблон, файлы, "Выполнить".
              Результат сюда не выводится — по выполнении окно переходит в
-             расширенный вид (см. ExpandedRoot). -->
-        <Grid x:Name="CompactRoot" Padding="20" RowSpacing="14">
+             расширенный вид (см. ExpandedRoot). Обёрнут в ScrollViewer — при
+             фиксированном размере окна длинные статусы генерации ("Всё ещё
+             обрабатываем...") иначе обрезались за нижней границей окна и были
+             нечитаемы; теперь в таком случае просто появляется прокрутка. -->
+        <ScrollViewer x:Name="CompactRoot" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Padding="20" RowSpacing="14">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Шапка: лого + имя/должность + иконки истории и выхода -->
+            <!-- Шапка: лого + имя/должность + иконка истории (кнопка выхода — внизу, см. LogoutButton) -->
             <Grid Grid.Row="0" ColumnSpacing="10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -34,21 +39,13 @@
                     <TextBlock x:Name="UserRoleText" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
                 </StackPanel>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
-                    <Button x:Name="HistoryButton" Click="OnHistoryClick" Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8">
-                        <Grid Width="18" Height="18">
-                            <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            <Line X1="9" Y1="9" X2="9" Y2="4.5" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                            <Line X1="9" Y1="9" X2="11.8" Y2="11" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                        </Grid>
-                    </Button>
-                    <Button x:Name="LogoutButton" Click="OnLogoutClick" Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8">
-                        <Grid Width="18" Height="18">
-                            <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="14" Height="14" HorizontalAlignment="Left" VerticalAlignment="Center" />
-                            <Path Data="M 11,9 L 17,9 M 14.3,6.3 L 17,9 L 14.3,11.7" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                        </Grid>
-                    </Button>
-                </StackPanel>
+                <Button Grid.Column="2" x:Name="HistoryButton" Click="OnHistoryClick" Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8">
+                    <Grid Width="18" Height="18">
+                        <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Line X1="9" Y1="9" X2="9" Y2="4.5" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        <Line X1="9" Y1="9" X2="11.8" Y2="11" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    </Grid>
+                </Button>
             </Grid>
 
             <!-- Шаблон -->
@@ -90,8 +87,11 @@
                         BorderThickness="1" CornerRadius="10" />
             </Grid>
 
-            <!-- Файлы: список -->
-            <Border Grid.Row="3" Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
+            <!-- Файлы: список. Раньше строка была "*" (тянулась на весь остаток
+                 окна) — теперь строки Grid все Auto (весь компактный вид внутри
+                 ScrollViewer, см. выше), поэтому высота списка зафиксирована явно,
+                 иначе он растягивался бы по числу файлов без предела. -->
+            <Border Grid.Row="3" Height="220" Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
                     BorderThickness="1" CornerRadius="10">
                 <ListView x:Name="FilesList" SelectionMode="Multiple" SelectionChanged="OnFilesSelectionChanged"
                           Background="Transparent" BorderThickness="0" Padding="4" />
@@ -108,7 +108,20 @@
                     <TextBlock x:Name="StatusText" VerticalAlignment="Center" TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
                 </StackPanel>
             </StackPanel>
+
+            <!-- Выход — внизу окна, отдельно от истории в шапке -->
+            <Button Grid.Row="5" x:Name="LogoutButton" Click="OnLogoutClick" HorizontalAlignment="Left"
+                    Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Grid Width="18" Height="18">
+                        <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="14" Height="14" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                        <Path Data="M 11,9 L 17,9 M 14.3,6.3 L 17,9 L 14.3,11.7" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    </Grid>
+                    <TextBlock Text="Выйти" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
+                </StackPanel>
+            </Button>
         </Grid>
+        </ScrollViewer>
 
         <!-- Расширенный вид — сайдбар с историей (чат-стиль) слева, ответ справа.
              Открывается по клику на историю или после выполнения запроса. -->

@@ -41,6 +41,10 @@ public partial class MainWindow : Window
         InitializeComponent();
         Title = "Claude Assistant";
         AppWindow.Resize(CompactSize);
+        // ApplicationIcon в csproj даёт иконку exe (Проводник/панель задач/ярлыки),
+        // но не иконку заголовка окна — AppWindow её не наследует автоматически,
+        // нужно выставлять отдельно.
+        AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "logo.ico"));
 
         // Трей-приложение: закрытие окна сворачивает в трей, а не завершает процесс —
         // выход только через пункт "Выход" в трее или программный логаут
@@ -202,11 +206,10 @@ public partial class MainWindow : Window
 
             // Иначе сохраняем текущий выбор, если этот шаблон всё ещё доступен — иначе
             // каждое переоткрытие окна сбрасывало бы выбранный пользователем шаблон.
-            // По умолчанию выбираем первый настоящий шаблон, если он есть — "Свой
-            // промпт" всего лишь запасной вариант, а не то, что должно навязчиво
-            // предлагаться первым при каждом старте.
+            // По умолчанию — "Свой промпт": большинству реальных запросов проще
+            // описать словами, чем подбирать подходящий готовый шаблон из списка.
             var stillAvailable = selectedId is null ? null : items.FirstOrDefault(t => t.Id == selectedId);
-            TemplateCombo.SelectedItem = preferredForPendingObject ?? stillAvailable ?? (templates.Count > 0 ? templates[0] : CustomPromptOption);
+            TemplateCombo.SelectedItem = preferredForPendingObject ?? stillAvailable ?? CustomPromptOption;
 
             // На случай, если TemplateCombo.SelectedItem структурно не изменился (запись
             // с теми же полями) и SelectionChanged из-за этого не переисполнился —
