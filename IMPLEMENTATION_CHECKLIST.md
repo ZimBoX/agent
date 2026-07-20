@@ -1030,10 +1030,95 @@
       timestamp (не только наличие) `.pri` в `publish\` против исходного
       `.xaml` перед каждым `vpk pack`, если менялась разметка** — присутствие
       файла ещё не значит, что он актуальный
-- [ ] Установщик (MSI/EXE) с регистрацией shell extension (запуск `register.ps1` при
-      установке — уже готов, см. `shell-extension/`)
-- [ ] MSIX sparse-пакет + самоподписанный сертификат для верхнего уровня меню Windows 11
-      (см. TODO в Этапе 8) — устанавливается вместе с остальным при инсталляции
+- [x] **Два канала обновлений (`beta`/`release`) + полноценный установщик с
+      автоматической регистрацией всего нужного, включая верхний уровень меню
+      Windows 11.** Закрывает оба последних пункта Этапа 11 разом — план см.
+      `nifty-jumping-crane.md` (или git-историю, если файл плана уже не
+      актуален к моменту чтения).
+      - **Каналы**: `AdminService`/`AdminController` (`ListReleaseVersionsAsync`/
+        `RetractReleaseAsync`) были жёстко зашиты на `releases.win.json` —
+        параметризованы по каналу (`?channel=win|beta`, default `win` для
+        обратной совместимости). Загрузка (`UploadReleaseAsync`) осталась
+        канал-агностичной — файлы сами называются с каналом внутри
+        (`releases.<channel>.json`), `vpk pack --channel` их так и создаёт.
+        Админка (`Releases.razor`) — выпадающий список канала. Клиент **не
+        трогался** — Velopack сам пинует канал по тому, с чем был собран
+        конкретный инсталлятор (подтверждено эмпирически: `1.0.26`/`beta` и
+        `26.0.0`/`win` — два полностью независимых, не пересекающихся фида).
+        Литеральный номер версии `1.0.26B`, как его написал пользователь, для
+        `vpk pack --packVersion` невалиден (не SemVer2) — используется канал
+        `beta` + чистая версия `1.0.26`, буква из сообщения была не нужна
+        (канал уже несёт этот смысл).
+      - **Автоматическая регистрация shell extension**: `register.ps1`
+        (регистрация `IExplorerCommand` через `HKCU\Software\Classes\CLSID\...`
+        + `*\shell\ClaudeAssistant` + `Directory\shell\ClaudeAssistant`)
+        перенесён на C# (`Services/ShellExtensionRegistrar.cs`,
+        `Microsoft.Win32.Registry`) и повешен на install-хуки `VelopackApp`
+        (`App.xaml.cs`: `OnAfterInstallFastCallback`/`OnAfterUpdateFastCallback`
+        — у `vpk pack` нет своего флага под произвольный post-install скрипт,
+        а у `VelopackApp` такие хуки есть). `register.ps1` остался в репозитории
+        для ручной отладки, но больше не обязателен при обычной установке.
+        Отдельная сложность: shell extension — самостоятельный проект
+        (`shell-extension/`), не связанный с клиентским csproj; собирается в
+        Release отдельно и его выход (`comhost.dll` + `.dll` + `.deps.json`/
+        `.runtimeconfig.json`) вручную копируется в `publish\ShellExtension\`
+        перед `vpk pack` — ещё один шаг, который легко забыть при следующем
+        релизе (как и `.pri`, см. ниже).
+      - **MSIX sparse-пакет для верхнего уровня меню Windows 11**: манифест —
+        `client/ClaudeAssistant.Client/msix-sparse/AppxManifest.xml` (именно
+        так называется файл, не `Package.appxmanifest` — `MakeAppx` требует
+        точное имя). `windows.fileExplorerContextMenus` с двумя `ItemType`
+        разных версий схемы: `desktop4:ItemType Type="*"` для файлов (только
+        `*` или `.расширение` — `Type="Directory"` в v4 **невалиден**, поймано
+        через реальный прогон `MakeAppx.exe` и сверку с локальными
+        `DesktopManifestSchema_v{4,5}.xsd` из Windows SDK, не по памяти) и
+        отдельный `desktop5:ItemType Type="Directory"` (папки поддержаны
+        только начиная со схемы v5) — оба ссылаются на уже существующий CLSID
+        `{B932951B-8D25-4B01-9CD6-C0AB6801A39E}` шелл-экстеншена, ничего
+        нового не регистрируют, просто дают Проводнику показать то же самое в
+        верхнем уровне. Иконки (`Square44x44Logo.png`/`Square150x150Logo.png`)
+        отрендерены из `Assets/logo.svg` тем же самодельным SVG-парсером, что
+        и `logo.ico` (см. запись про значок приложения выше).
+      - **Сертификат**: самоподписанный, `CN=ClaudeAssistant`,
+        `certs/ClaudeAssistant.{pfx,cer}` (**не в git** — см. `.gitignore`,
+        как и `AITUNNEL_API_KEY` — секрет только на диске сборочной машины).
+        `New-SelfSignedCertificate` без явных параметров падал на этой машине
+        (`CRYPT_E_UNKNOWN_ALGO`, `0x80091002`) — сломан дефолтный CNG-провайдер;
+        обошли явным `-Provider "Microsoft Software Key Storage Provider"`.
+        Регенерировать при необходимости:
+        `New-SelfSignedCertificate -Type Custom -Subject "CN=ClaudeAssistant" -KeyUsage DigitalSignature -CertStoreLocation Cert:\CurrentUser\My -KeyAlgorithm RSA -KeyLength 2048 -Provider "Microsoft Software Key Storage Provider" -HashAlgorithm SHA256 -KeyExportPolicy Exportable -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3","2.5.29.19={text}")`,
+        затем `Export-PfxCertificate`/`Export-Certificate`.
+      - **Доверие сертификату — только LocalMachine, подтверждено эмпирически.**
+        Добавление в `CurrentUser\TrustedPeople`/`CurrentUser\Root`
+        (`certutil -addstore -user`) не помогает — `Add-AppxPackage -Path
+        <подписанный .msix> -ExternalLocation <папка>` всё равно падает с
+        `0x800B0109` ("корневой сертификат... должен быть доверенным"). Нужен
+        именно `certutil -addstore -f Root <cert>` без `-user` (LocalMachine),
+        что требует прав администратора — отсюда решение пользователя ставить
+        через **machine-wide MSI** (`vpk pack --msi`, UAC один раз при
+        установке), а не портативный `Setup.exe`.
+      - **`Services/MsixSparsePackageRegistrar.cs`** — та же логика (certutil
+        + `Add-AppxPackage -ExternalLocation`), тоже на install-хуках
+        `VelopackApp`, с явной проверкой `WindowsPrincipal.IsInRole(Administrator)`
+        перед попыткой — при портативной установке без элевации шаг тихо
+        пропускается (верхний уровень меню не появится, но классический пункт
+        меню и само приложение продолжают работать).
+      - **`.pri`-баг ударил снова, третий раз в этой сессии** — даже
+        `-t:Build,Publish` не скопировал свежий `.pri` в `publish\`
+        автоматически; спасла только сверка timestamp вручную (см. более
+        раннюю запись про баг с v25) — делать это перед **каждым** `vpk pack`,
+        без исключений.
+      - **Живая проверка (то, что подтверждено на этой машине):** MSIX
+        манифест реально собирается и валиден (`MakeAppx.exe pack` без
+        `/nv` ловит настоящие ошибки схемы — так и нашлась проблема с
+        `Type="Directory"`); пакет подписывается (`signtool.exe sign`); оба
+        канала (`beta`/`win`) на backend полностью независимы
+        (`GET /api/admin/releases?channel=...` — разные списки, ретракт одного
+        не трогает другой). **Не проверено живьём из-за необходимости
+        UAC-клика, который нельзя выполнить не глядя** — реальная установка
+        `ClaudeAssistant.Client-beta.msi`, автоматическая регистрация shell
+        extension и верхнего уровня меню под реальной элевацией. Это первое,
+        что нужно сделать при следующем ручном тестировании.
 
 ## Этап 12 — Инфраструктура / деплой (on-prem сервер)
 

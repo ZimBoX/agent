@@ -18,6 +18,11 @@ Thumbs.db
 
 ## Release artifacts (large binaries, not source)
 releases-local/
+releases-local-beta/
 release-v1.zip
 release-v2.zip
 *.zip
+
+## Code-signing certificate (private key) — never in git, machine-local only
+certs/*.pfx
+certs/*.cer

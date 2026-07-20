@@ -21,7 +21,24 @@ public partial class App : Application
         // до любой другой логики. Velopack перехватывает служебные запуски
         // (install/uninstall/после-обновления хуки) и в этих случаях завершает
         // процесс сам, не доходя до обычного старта приложения.
-        VelopackApp.Build().Run();
+        // Регистрация пункта меню Проводника (см. ShellExtensionRegistrar) вешается
+        // именно сюда, а не в отдельный post-install скрипт — у `vpk pack` нет
+        // флага для произвольного пост-install хука, а у VelopackApp есть.
+        // Срабатывает и на чистую установку, и на каждое обновление (например,
+        // если версия comhost.dll в поставке изменилась) — регистрация
+        // идемпотентна, повторный вызов безопасен.
+        VelopackApp.Build()
+            .OnAfterInstallFastCallback(_ =>
+            {
+                ShellExtensionRegistrar.Register();
+                MsixSparsePackageRegistrar.Register();
+            })
+            .OnAfterUpdateFastCallback(_ =>
+            {
+                ShellExtensionRegistrar.Register();
+                MsixSparsePackageRegistrar.Register();
+            })
+            .Run();
 
         // Второй важный ранний выход: если клиент уже запущен, этот процесс не
         // должен создавать вообще ничего (ни окна, ни трей-значка) — раньше
