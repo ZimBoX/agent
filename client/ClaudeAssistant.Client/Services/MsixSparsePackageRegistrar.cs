@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Principal;
 
 namespace ClaudeAssistant.Client.Services;
 
@@ -9,14 +8,20 @@ namespace ClaudeAssistant.Client.Services;
 // поверх уже зарегистрированного классическим способом IExplorerCommand
 // (см. ShellExtensionRegistrar) — это не альтернатива, а дополнение.
 //
-// Требует прав администратора: доверие самоподписанному сертификату
-// добавляется в LocalMachine-хранилище (подтверждено эмпирически — CurrentUser
-// хранилище Add-AppxPackage не принимает, отдаёт 0x800B0109). Поэтому вызывается
-// из install-hook только при установке через machine-wide MSI (vpk pack --msi),
-// который сам запрашивает UAC один раз при установке. При портативной установке
-// (Setup.exe без --msi, без элевации) этот шаг тихо пропускается — верхний
-// уровень меню не появится, но само приложение и классический пункт меню
-// продолжают работать нормально.
+// Требует прав администратора: доверие самоподписанному сертификату добавляется
+// в LocalMachine-хранилище (подтверждено эмпирически — CurrentUser хранилище
+// Add-AppxPackage не принимает, отдаёт 0x800B0109).
+//
+// Живой тест показал, что даже при установке через machine-wide MSI (UAC при
+// установке) сам install-hook (`--veloapp-install`) выполняется НЕ в повышенном
+// контексте — реестр (HKCU, не требует прав) писался нормально, а
+// LocalMachine\Root и Add-AppxPackage — нет, при том что вызывающий процесс
+// оказывался неэлевированным. Поэтому здесь не просто проверка "уже
+// администратор ли я", а самостоятельный релонч через `Verb = "runas"` —
+// отдельный UAC-запрос именно на этот шаг. Вызывается только из
+// OnAfterInstallFastCallback (не из OnAfterUpdateFastCallback) — сертификат и
+// пакет нужно поставить один раз, а не дёргать UAC при каждом тихом
+// автообновлении.
 public static class MsixSparsePackageRegistrar
 {
     public static void Register()
@@ -32,48 +37,59 @@ public static class MsixSparsePackageRegistrar
                 return;
             }
 
-            if (!IsElevated())
+            if (IsAlreadyRegistered())
             {
-                // Без прав администратора certutil -addstore Root и
-                // Add-AppxPackage -ExternalLocation всё равно откажут — не тратим
-                // время на заведомо обречённые попытки и не показываем пользователю
-                // непонятные ошибки за спиной.
                 return;
             }
 
-            RunHidden("certutil.exe", $"-addstore -f Root \"{certPath}\"");
+            var script =
+                $"certutil.exe -addstore -f Root \"{certPath}\"; "
+                + $"Add-AppxPackage -Path \"{msixPath}\" -ExternalLocation \"{installDir}\"";
 
-            RunHidden(
-                "powershell.exe",
-                $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " +
-                    $"\"Add-AppxPackage -Path '{msixPath}' -ExternalLocation '{installDir}'\""
-            );
+            var psi = new ProcessStartInfo("powershell.exe")
+            {
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{script}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+
+            using var process = Process.Start(psi);
+            process?.WaitForExit(60_000);
         }
         catch (Exception)
         {
             // Верхний уровень меню — украшение поверх уже работающего классического
             // пункта меню, не критичная для запуска приложения функциональность.
+            // Сюда же попадает отказ пользователя от UAC-запроса (Win32Exception 1223) —
+            // ничего страшного, просто продолжаем без верхнего уровня меню.
         }
     }
 
-    private static bool IsElevated()
+    // Не дёргаем UAC повторно при каждой установке/переустановке, если пакет уже
+    // зарегистрирован — сертификат и sparse-пакет одноразовые по своей природе,
+    // повторный Add-AppxPackage с тем же ExternalLocation просто не нужен.
+    private static bool IsAlreadyRegistered()
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        var principal = new WindowsPrincipal(identity);
-        return principal.IsInRole(WindowsBuiltInRole.Administrator);
-    }
-
-    private static void RunHidden(string fileName, string arguments)
-    {
-        using var process = Process.Start(
-            new ProcessStartInfo(fileName, arguments)
+        try
+        {
+            var psi = new ProcessStartInfo("powershell.exe")
             {
+                Arguments =
+                    "-NoProfile -NonInteractive -Command "
+                    + "\"if (Get-AppxPackage -Name 'ClaudeAssistant.ShellExtension') { 'True' } else { 'False' }\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            }
-        );
-        process?.WaitForExit(30_000);
+            };
+            using var process = Process.Start(psi);
+            var output = process?.StandardOutput.ReadToEnd().Trim();
+            process?.WaitForExit(10_000);
+            return output == "True";
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 }

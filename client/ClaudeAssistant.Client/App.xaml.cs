@@ -24,20 +24,21 @@ public partial class App : Application
         // Регистрация пункта меню Проводника (см. ShellExtensionRegistrar) вешается
         // именно сюда, а не в отдельный post-install скрипт — у `vpk pack` нет
         // флага для произвольного пост-install хука, а у VelopackApp есть.
-        // Срабатывает и на чистую установку, и на каждое обновление (например,
-        // если версия comhost.dll в поставке изменилась) — регистрация
-        // идемпотентна, повторный вызов безопасен.
+        // ShellExtensionRegistrar (HKCU, прав администратора не требует) —
+        // срабатывает и на установку, и на каждое обновление (например, если
+        // версия comhost.dll в поставке изменилась) — идемпотентно, повторный
+        // вызов безопасен. MsixSparsePackageRegistrar — только на install:
+        // требует LocalMachine-хранилище сертификатов и сам запрашивает свой
+        // UAC (см. комментарий в файле — install-hook MSI оказался
+        // неэлевированным на практике), а дёргать UAC при каждом тихом
+        // автообновлении было бы неожиданно для пользователя.
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ =>
             {
                 ShellExtensionRegistrar.Register();
                 MsixSparsePackageRegistrar.Register();
             })
-            .OnAfterUpdateFastCallback(_ =>
-            {
-                ShellExtensionRegistrar.Register();
-                MsixSparsePackageRegistrar.Register();
-            })
+            .OnAfterUpdateFastCallback(_ => ShellExtensionRegistrar.Register())
             .Run();
 
         // Второй важный ранний выход: если клиент уже запущен, этот процесс не
