@@ -63,4 +63,24 @@ public static class ShellExtensionRegistrar
         key.SetValue(null, "Отправить в Claude Assistant");
         key.SetValue("ExplorerCommandHandler", ClsId);
     }
+
+    // Автоматическая версия shell-extension/unregister.ps1 — вызывается из
+    // OnBeforeUninstallFastCallback (App.xaml.cs). Без этого удаление через
+    // "Установка и удаление программ" сносит только файлы, которые поставил
+    // сам Velopack — про наши собственные ключи реестра (CLSID, *\shell,
+    // Directory\shell) он не знает, и они оставались бы висеть в реестре
+    // даже после полного удаления приложения.
+    public static void Unregister()
+    {
+        try
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\*\shell\ClaudeAssistant", throwOnMissingSubKey: false);
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\Directory\shell\ClaudeAssistant", throwOnMissingSubKey: false);
+            Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\CLSID\{ClsId}", throwOnMissingSubKey: false);
+        }
+        catch (Exception)
+        {
+            // Неудачная очистка не должна помешать остальному процессу удаления.
+        }
+    }
 }

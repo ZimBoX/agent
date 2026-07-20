@@ -32,6 +32,10 @@ public partial class App : Application
         // UAC (см. комментарий в файле — install-hook MSI оказался
         // неэлевированным на практике), а дёргать UAC при каждом тихом
         // автообновлении было бы неожиданно для пользователя.
+        // OnBeforeUninstallFastCallback — обратная операция: без неё удаление
+        // через "Установка и удаление программ" сносило бы только то, что
+        // поставил сам Velopack, а наши собственные ключи реестра и
+        // зарегистрированный sparse-пакет оставались бы висеть в системе.
         VelopackApp.Build()
             .OnAfterInstallFastCallback(_ =>
             {
@@ -39,6 +43,11 @@ public partial class App : Application
                 MsixSparsePackageRegistrar.Register();
             })
             .OnAfterUpdateFastCallback(_ => ShellExtensionRegistrar.Register())
+            .OnBeforeUninstallFastCallback(_ =>
+            {
+                ShellExtensionRegistrar.Unregister();
+                MsixSparsePackageRegistrar.Unregister();
+            })
             .Run();
 
         // Второй важный ранний выход: если клиент уже запущен, этот процесс не

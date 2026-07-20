@@ -12,18 +12,20 @@ namespace ClaudeAssistant.Client.Services;
 // в LocalMachine-хранилище (подтверждено эмпирически — CurrentUser хранилище
 // Add-AppxPackage не принимает, отдаёт 0x800B0109).
 //
-// Живой тест показал, что даже при установке через machine-wide MSI (UAC при
-// установке) сам install-hook (`--veloapp-install`) выполняется НЕ в повышенном
-// контексте — реестр (HKCU, не требует прав) писался нормально, а
-// LocalMachine\Root и Add-AppxPackage — нет, при том что вызывающий процесс
-// оказывался неэлевированным. Поэтому здесь не просто проверка "уже
-// администратор ли я", а самостоятельный релонч через `Verb = "runas"` —
-// отдельный UAC-запрос именно на этот шаг. Вызывается только из
-// OnAfterInstallFastCallback (не из OnAfterUpdateFastCallback) — сертификат и
-// пакет нужно поставить один раз, а не дёргать UAC при каждом тихом
-// автообновлении.
+// Живой тест показал, что install-hook (`--veloapp-install`) не всегда
+// оказывается элевированным сам по себе (ни под MSI, ни через программный
+// Verb=runas изнутри хука — судя по всему, UAC-запрос из фонового
+// install-хука не всегда успевает корректно отрендериться пользователю).
+// Поэтому основной способ получить права администратора теперь — манифест
+// requireAdministrator, встроенный прямо в Setup.exe после `vpk pack` (см.
+// релизный пайплайн / IMPLEMENTATION_CHECKLIST.md) — весь процесс установки,
+// включая install-hook, идёт уже в повышенном контексте. Self-elevation
+// через Verb=runas оставлен как запасной вариант на случай, если по какой-то
+// причине элевация из манифеста не унаследовалась.
 public static class MsixSparsePackageRegistrar
 {
+    private const string PackageName = "ClaudeAssistant.ShellExtension";
+
     public static void Register()
     {
         try
@@ -46,24 +48,75 @@ public static class MsixSparsePackageRegistrar
                 $"certutil.exe -addstore -f Root \"{certPath}\"; "
                 + $"Add-AppxPackage -Path \"{msixPath}\" -ExternalLocation \"{installDir}\"";
 
-            var psi = new ProcessStartInfo("powershell.exe")
-            {
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{script}\"",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden,
-            };
-
-            using var process = Process.Start(psi);
-            process?.WaitForExit(60_000);
+            RunElevatedIfNeeded(script);
         }
         catch (Exception)
         {
             // Верхний уровень меню — украшение поверх уже работающего классического
             // пункта меню, не критичная для запуска приложения функциональность.
-            // Сюда же попадает отказ пользователя от UAC-запроса (Win32Exception 1223) —
-            // ничего страшного, просто продолжаем без верхнего уровня меню.
         }
+    }
+
+    // Вызывается из OnBeforeUninstallFastCallback — без этого удаление через
+    // "Установка и удаление программ" оставляло бы зарегистрированный
+    // sparse-пакет и доверенный сертификат висеть в системе даже после
+    // полного удаления самого приложения.
+    public static void Unregister()
+    {
+        try
+        {
+            var script =
+                $"Get-AppxPackage -Name '{PackageName}' | Remove-AppxPackage -ErrorAction SilentlyContinue; "
+                + "certutil.exe -delstore Root \"ClaudeAssistant\"";
+
+            RunElevatedIfNeeded(script);
+        }
+        catch (Exception)
+        {
+            // Неудачная очистка не должна помешать остальному процессу удаления.
+        }
+    }
+
+    private static void RunElevatedIfNeeded(string script)
+    {
+        if (IsElevated())
+        {
+            RunHidden(script);
+            return;
+        }
+
+        var psi = new ProcessStartInfo("powershell.exe")
+        {
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \"{script}\"",
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden,
+        };
+
+        using var process = Process.Start(psi);
+        process?.WaitForExit(60_000);
+    }
+
+    private static void RunHidden(string script)
+    {
+        using var process = Process.Start(
+            new ProcessStartInfo("powershell.exe")
+            {
+                Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"{script}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            }
+        );
+        process?.WaitForExit(60_000);
+    }
+
+    private static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var principal = new System.Security.Principal.WindowsPrincipal(identity);
+        return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
     }
 
     // Не дёргаем UAC повторно при каждой установке/переустановке, если пакет уже
@@ -77,7 +130,7 @@ public static class MsixSparsePackageRegistrar
             {
                 Arguments =
                     "-NoProfile -NonInteractive -Command "
-                    + "\"if (Get-AppxPackage -Name 'ClaudeAssistant.ShellExtension') { 'True' } else { 'False' }\"",
+                    + $"\"if (Get-AppxPackage -Name '{PackageName}') {{ 'True' }} else {{ 'False' }}\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
