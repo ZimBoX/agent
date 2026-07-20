@@ -18,12 +18,22 @@ public class TrayIconService : IDisposable
 
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = LoadAppIcon(),
             Text = "Claude Assistant",
             Visible = true,
             ContextMenuStrip = menu,
         };
         _notifyIcon.DoubleClick += (_, _) => OpenRequested?.Invoke();
+    }
+
+    // Тот же .ico, что зашит в exe (ApplicationIcon в csproj) — трей и exe
+    // должны показывать один и тот же логотип, а не системную заглушку.
+    // Фоллбэк на SystemIcons.Application на случай, если файл не скопировался
+    // в publish (лучше показать хоть какую-то иконку, чем упасть при старте).
+    private static Icon LoadAppIcon()
+    {
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "logo.ico");
+        return File.Exists(iconPath) ? new Icon(iconPath) : SystemIcons.Application;
     }
 
     // Маленький ненавязчивый toast (раздел 9 плана) — balloon tip через уже имеющийся
