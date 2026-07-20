@@ -16,6 +16,9 @@ publish/
 Thumbs.db
 .DS_Store
 
+## Local run logs
+*.log
+
 ## Release artifacts (large binaries, not source)
 releases-local/
 releases-local-beta/
