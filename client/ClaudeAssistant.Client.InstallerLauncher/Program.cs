@@ -55,10 +55,17 @@ static void RegisterTopLevelMenu()
         return;
     }
 
-    if (IsAlreadyRegistered())
-    {
-        return;
-    }
+    // Живой тест показал: пропускать Add-AppxPackage при уже существующей
+    // регистрации — вредно. Версия sparse-пакета захардкожена как 1.0.0.0 и не
+    // меняется между релизами клиента, поэтому Get-AppxPackage находит "тот же"
+    // пакет даже после переустановки с новым comhost.dll на диске — но пункт
+    // меню при этом пропадал из верхнего уровня, пока не выполнялся повторный
+    // Add-AppxPackage вручную. Судя по всему, packaged-COM регистрация
+    // привязывается к конкретному состоянию файла на диске в момент
+    // регистрации, и простое совпадение имени пакета не гарантирует, что она
+    // всё ещё актуальна. Add-AppxPackage сам по себе идемпотентен и быстр —
+    // проще каждый раз перерегистрировать, чем пытаться угадать, когда это
+    // безопасно пропустить.
 
     // Настоящая причина, из-за которой Add-AppxPackage падал с 0x80073D2E даже
     // при верной элевации и доверенном сертификате: на машине не включён
@@ -92,19 +99,3 @@ static void RegisterTopLevelMenu()
     }
 }
 
-static bool IsAlreadyRegistered()
-{
-    var psi = new ProcessStartInfo("powershell.exe")
-    {
-        Arguments =
-            "-NoProfile -NonInteractive -Command "
-            + "\"if (Get-AppxPackage -Name 'ClaudeAssistant.ShellExtension') { 'True' } else { 'False' }\"",
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        RedirectStandardOutput = true,
-    };
-    using var process = Process.Start(psi);
-    var output = process?.StandardOutput.ReadToEnd().Trim();
-    process?.WaitForExit(10_000);
-    return output == "True";
-}
