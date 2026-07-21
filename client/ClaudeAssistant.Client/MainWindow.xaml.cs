@@ -56,6 +56,15 @@ public partial class MainWindow : Window
                 return;
             }
             args.Cancel = true;
+
+            // Список файлов и папка-объект относятся к конкретному запросу — при
+            // закрытии окна (сворачивании в трей) сбрасываем их, чтобы следующий
+            // открытый запрос не унаследовал файлы от предыдущего, не связанного
+            // с ним.
+            _filePaths.Clear();
+            _launchedFolderPath = null;
+            UpdateObjectRootDisplay();
+
             AppWindow.Hide();
         };
 

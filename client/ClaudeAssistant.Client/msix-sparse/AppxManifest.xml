@@ -8,10 +8,17 @@
   (см. ShellExtensionRegistrar / install-hook в App.xaml.cs) — сама MSIX-упаковка
   не содержит файлов приложения, только манифест + иконки.
 
-  windows.fileExplorerContextMenus ссылается на тот же CLSID, что уже
-  зарегистрирован классическим способом через ShellExtensionRegistrar
-  (IExplorerCommand, comhost.dll) — это не два разных расширения, а два
-  способа сообщить Проводнику об одном и том же уже существующем обработчике.
+  windows.fileExplorerContextMenus ссылается на CLSID обработчика
+  (IExplorerCommand, comhost.dll). КЛЮЧЕВОЙ момент, найденный сравнением с
+  рабочим sparse-пакетом самого VS Code
+  (Microsoft.VisualStudioCode_..._neutral__8wekyb3d8bbwe): для СОВРЕМЕННОГО
+  меню Windows 11 этот CLSID должен резолвиться как packaged-COM — через
+  <com:Extension Category="windows.comServer"> ВНУТРИ пакета, а не через
+  классическую запись HKCU\CLSID\...\InprocServer32 (та работает только для
+  старого меню в "Показать дополнительные параметры"). Без com:ComServer
+  Windows не может активировать обработчик и молча выкидывает пункт из
+  верхнего уровня меню, хотя Get-AppxPackage и показывает Status: Ok.
+  VS Code делает именно так — SurrogateServer, ссылающийся на свою DLL.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -19,7 +26,9 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
   xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
-  IgnorableNamespaces="uap rescap desktop4 desktop5">
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap rescap desktop4 desktop5 uap10 com">
 
   <Identity
     Name="ClaudeAssistant.ShellExtension"
@@ -31,6 +40,11 @@
     <DisplayName>Claude Assistant</DisplayName>
     <PublisherDisplayName>ClaudeAssistant</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
+    <!-- Без этого Add-AppxPackage -ExternalLocation отказывает с
+         0x80073D2E независимо от прав администратора и sideloading —
+         подтверждено прямым запуском на реальной машине (см.
+         IMPLEMENTATION_CHECKLIST.md, Этап 11). -->
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
   </Properties>
 
   <Resources>
@@ -69,6 +83,21 @@
             </desktop5:ItemType>
           </desktop4:FileExplorerContextMenus>
         </desktop4:Extension>
+        <!-- Packaged-COM объявление того же CLSID — без него современное меню
+             Windows 11 не активирует обработчик (см. комментарий вверху файла).
+             SurrogateServer хостит нашу in-proc comhost.dll в суррогатном
+             процессе (dllhost) — тот же приём, что у VS Code. Path — относительно
+             внешнего расположения пакета (-ExternalLocation = папка "current"),
+             там DLL лежит в подпапке ShellExtension\. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="Claude Assistant">
+              <com:Class Id="B932951B-8D25-4B01-9CD6-C0AB6801A39E"
+                         Path="ShellExtension\ClaudeAssistant.ShellExtension.comhost.dll"
+                         ThreadingModel="Both" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
       </Extensions>
     </Application>
   </Applications>

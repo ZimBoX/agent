@@ -22,15 +22,17 @@ public class SendToClaudeCommand : IExplorerCommand
 
     public void GetIcon(IShellItemArray? psiItemArray, out string ppszIcon)
     {
-        // Без кастомной иконки в MVP — Explorer покажет иконку по умолчанию.
-        ppszIcon = string.Empty;
-        throw new NotImplementedException();
+        // Иконка самого клиента, индекс 0 — формат "путь,индекс", как ожидает
+        // Explorer. Раньше здесь был NotImplementedException (недоделанная
+        // заглушка MVP) — исключение из COM-метода Explorer трактует как отказ,
+        // из-за этого пункт меню оставался без иконки вообще.
+        var exePath = GetClientExePath();
+        ppszIcon = exePath is not null && File.Exists(exePath) ? $"{exePath},0" : string.Empty;
     }
 
     public void GetToolTip(IShellItemArray? psiItemArray, out string ppszInfotip)
     {
         ppszInfotip = string.Empty;
-        throw new NotImplementedException();
     }
 
     public void GetCanonicalName(out Guid pguidCommandName)

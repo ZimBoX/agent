@@ -60,8 +60,17 @@ static void RegisterTopLevelMenu()
         return;
     }
 
+    // Настоящая причина, из-за которой Add-AppxPackage падал с 0x80073D2E даже
+    // при верной элевации и доверенном сертификате: на машине не включён
+    // sideloading (Параметры → Для разработчиков). Без него Windows отказывается
+    // разворачивать sparse-пакет с -ExternalLocation в принципе — это
+    // не ошибка кода, а требование ОС, подтверждённое прямым запуском
+    // Add-AppxPackage вручную. AllowAllTrustedApps — официальный реестровый
+    // переключатель именно этой настройки (уже, чем полный Developer Mode).
     var script =
-        $"certutil.exe -addstore -f Root \"{certPath}\"; "
+        "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock\" "
+        + "/v AllowAllTrustedApps /t REG_DWORD /d 1 /f; "
+        + $"certutil.exe -addstore -f Root \"{certPath}\"; "
         + $"Add-AppxPackage -Path \"{msixPath}\" -ExternalLocation \"{currentDir}\"";
 
     using var process = Process.Start(
