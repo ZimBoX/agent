@@ -6,6 +6,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Install ClaudeAssistant</AssemblyName>
+    <!-- Тонкий установщик: self-contained single-file с обрезкой (trimming) —
+         скачивает Setup.exe с сервера, сам payload не несёт. Trimming ужимает
+         сборку (простой загрузчик почти не тянет BCL). Native AOT дал бы ещё
+         меньше, но требует настроенного окружения MSVC-линковщика, которого нет
+         на сборочной машине (vswhere/link.exe вне PATH) — trimming надёжнее. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Манифест встраивается штатным MSBuild-механизмом при сборке — не
          пост-обработкой готового exe инструментом вроде mt.exe. Патчинг
          УЖЕ собранного Velopack Setup.exe таким инструментом (через

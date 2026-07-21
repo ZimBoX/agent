@@ -1,34 +1,68 @@
 using System.Diagnostics;
 
-// Ищет реальный Velopack Setup.exe рядом с собой по маске — не хардкодит канал
-// (win/beta), чтобы один и тот же лаунчер годился для обеих сборок без пересборки.
-var installerDir = AppContext.BaseDirectory;
-var setupExePath = Directory.GetFiles(installerDir, "ClaudeAssistant.Client-*-Setup.exe").FirstOrDefault();
+// Тонкий установщик: не несёт в себе payload приложения, а скачивает актуальный
+// Velopack Setup.exe с backend-сервера и запускает его. Это избавляет от
+// необходимости класть два файла рядом (лаунчер + Setup.exe) — распространяется
+// только один этот exe. Манифест требует прав администратора (app.manifest,
+// requireAdministrator) — они нужны и для install-хука, и для регистрации
+// sparse-пакета верхнего меню (RegisterTopLevelMenu ниже).
+//
+// Канал и адрес сервера — константы сборки. Для беты и локального теста это
+// localhost; при деплое на боевой сервер (Этап 12) меняется здесь на адрес
+// компании. Имя Setup.exe детерминировано: `vpk pack --channel <ch>` выпускает
+// ClaudeAssistant.Client-<ch>-Setup.exe, backend отдаёт его как статику из
+// /releases (см. Program.cs бэкенда, UseStaticFiles для ReleasesPath).
 
-if (setupExePath is null)
+const string backendBaseUrl = "http://localhost:5149";
+const string channel = "beta";
+var setupUrl = $"{backendBaseUrl}/releases/ClaudeAssistant.Client-{channel}-Setup.exe";
+
+var setupExePath = Path.Combine(Path.GetTempPath(), $"ClaudeAssistant.Client-{channel}-Setup.exe");
+
+Console.WriteLine($"Загрузка установщика с {setupUrl} ...");
+try
 {
-    Console.WriteLine("Не найден файл установки (ClaudeAssistant.Client-*-Setup.exe) рядом с этим лаунчером.");
+    using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+    using var response = await http.GetAsync(setupUrl, HttpCompletionOption.ResponseHeadersRead);
+    response.EnsureSuccessStatusCode();
+    await using (var fs = File.Create(setupExePath))
+    {
+        await response.Content.CopyToAsync(fs);
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Не удалось скачать установщик: {ex.Message}");
+    Console.WriteLine("Проверьте подключение к серверу и попробуйте снова.");
     Console.WriteLine("Нажмите любую клавишу для выхода...");
     Console.ReadKey();
     return 1;
 }
 
-// UseShellExecute=true — дочерний процесс наследует токен уже полученной
-// здесь элевации, повторного запроса UAC для самого Setup.exe не будет.
+Console.WriteLine("Установка...");
+// UseShellExecute=true — дочерний процесс наследует токен уже полученной здесь
+// элевации, повторного запроса UAC для самого Setup.exe не будет.
 using (var process = Process.Start(new ProcessStartInfo(setupExePath) { UseShellExecute = true }))
 {
     process?.WaitForExit();
 }
 
-// Живой тест показал: Setup.exe деэлевируется перед тем, как запустить
-// свежеустановленное приложение для отработки install-хука
-// (OnAfterInstallFastCallback) — это объясняет, почему классическая
-// регистрация (HKCU, не требует прав) отрабатывала, а MSIX sparse-пакет для
-// верхнего уровня меню (требует LocalMachine-хранилище сертификатов) — нет,
-// даже несмотря на элевацию самого Setup.exe. Поэтому эту часть делаем прямо
-// здесь — это единственный процесс во всей цепочке, для которого элевация
-// подтверждена реальным кликом пользователя по UAC, а не унаследована.
+// Setup.exe (точнее, install-хук приложения) деэлевируется Velopack перед
+// запуском, поэтому регистрацию sparse-пакета верхнего меню (нужны права
+// администратора: LocalMachine-хранилище сертификатов + Add-AppxPackage) делаем
+// здесь — это единственный процесс в цепочке с подтверждённой реальным кликом
+// по UAC элевацией.
 RegisterTopLevelMenu();
+
+try
+{
+    File.Delete(setupExePath);
+}
+catch
+{
+    // Временный файл в TEMP — не критично, если не удалился.
+}
+
 return 0;
 
 static void RegisterTopLevelMenu()
@@ -55,25 +89,15 @@ static void RegisterTopLevelMenu()
         return;
     }
 
-    // Живой тест показал: пропускать Add-AppxPackage при уже существующей
-    // регистрации — вредно. Версия sparse-пакета захардкожена как 1.0.0.0 и не
-    // меняется между релизами клиента, поэтому Get-AppxPackage находит "тот же"
-    // пакет даже после переустановки с новым comhost.dll на диске — но пункт
-    // меню при этом пропадал из верхнего уровня, пока не выполнялся повторный
-    // Add-AppxPackage вручную. Судя по всему, packaged-COM регистрация
-    // привязывается к конкретному состоянию файла на диске в момент
-    // регистрации, и простое совпадение имени пакета не гарантирует, что она
-    // всё ещё актуальна. Add-AppxPackage сам по себе идемпотентен и быстр —
-    // проще каждый раз перерегистрировать, чем пытаться угадать, когда это
-    // безопасно пропустить.
-
-    // Настоящая причина, из-за которой Add-AppxPackage падал с 0x80073D2E даже
-    // при верной элевации и доверенном сертификате: на машине не включён
-    // sideloading (Параметры → Для разработчиков). Без него Windows отказывается
-    // разворачивать sparse-пакет с -ExternalLocation в принципе — это
-    // не ошибка кода, а требование ОС, подтверждённое прямым запуском
-    // Add-AppxPackage вручную. AllowAllTrustedApps — официальный реестровый
-    // переключатель именно этой настройки (уже, чем полный Developer Mode).
+    // Всегда перерегистрируем (не пропускаем при уже существующей регистрации):
+    // версия sparse-пакета захардкожена 1.0.0.0 и не меняется между релизами,
+    // поэтому Get-AppxPackage находит "тот же" пакет после переустановки с новым
+    // comhost.dll — но пункт меню при этом пропадал, пока не выполнялся повторный
+    // Add-AppxPackage. Он идемпотентен и быстр.
+    //
+    // AllowAllTrustedApps=1 — включает sideloading; без него Add-AppxPackage
+    // -ExternalLocation отказывает с 0x80073D2E даже при верной элевации и
+    // доверенном сертификате (подтверждено на реальной машине).
     var script =
         "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock\" "
         + "/v AllowAllTrustedApps /t REG_DWORD /d 1 /f; "
@@ -98,4 +122,3 @@ static void RegisterTopLevelMenu()
         Console.WriteLine($"Регистрация верхнего уровня меню завершилась с ошибкой: {stderr}");
     }
 }
-

@@ -17,8 +17,41 @@ public record HistoryListItem(string Title, string Subtitle, HistoryEntry Entry)
 
 public partial class MainWindow : Window
 {
-    private static readonly SizeInt32 CompactSize = new(380, 640);
+    // Компактный вид имеет фиксированную ширину, но высота подстраивается под то,
+    // какие необязательные поля сейчас показаны: своё поле промпта (высокое) —
+    // окно выше; поле "объект" для поиска по папке — среднее; обычный шаблон без
+    // доп. полей — самое низкое. См. ApplyCompactHeight / OnTemplateSelectionChanged.
+    private const int CompactWidth = 380;
+    private const int CompactHeightTemplate = 560;
+    private const int CompactHeightObjectPanel = 630;
+    private const int CompactHeightCustomPrompt = 690;
     private static readonly SizeInt32 ExpandedSize = new(900, 640);
+
+    private SizeInt32 CurrentCompactSize => new(CompactWidth, CurrentCompactHeight());
+
+    private int CurrentCompactHeight()
+    {
+        if (CustomPromptBox.Visibility == Visibility.Visible)
+        {
+            return CompactHeightCustomPrompt;
+        }
+        if (ObjectPanel.Visibility == Visibility.Visible)
+        {
+            return CompactHeightObjectPanel;
+        }
+        return CompactHeightTemplate;
+    }
+
+    // Подгоняет высоту окна под текущий компактный контент — но только когда мы
+    // действительно в компактном виде (в расширенном высоту трогать нельзя).
+    private void ApplyCompactHeight()
+    {
+        if (_isExpanded)
+        {
+            return;
+        }
+        AppWindow.Resize(CurrentCompactSize);
+    }
 
     private readonly BackendClient _backendClient = new();
     private readonly ObservableCollection<string> _filePaths = [];
@@ -40,7 +73,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Title = "Claude Assistant";
-        AppWindow.Resize(CompactSize);
+        AppWindow.Resize(CurrentCompactSize);
         // ApplicationIcon в csproj даёт иконку exe (Проводник/панель задач/ярлыки),
         // но не иконку заголовка окна — AppWindow её не наследует автоматически,
         // нужно выставлять отдельно.
@@ -73,7 +106,9 @@ public partial class MainWindow : Window
         // Файлы и (максимум одна) папка, переданные при запуске — например, из shell
         // extension через ПКМ в Explorer. Папка — не файл, прикрепить её как документ
         // нельзя, вместо этого она становится "объектом" для поиска (см. HandleLaunchArgs).
-        HandleLaunchArgs(Environment.GetCommandLineArgs().Skip(1).ToList());
+        // App.LaunchPaths, а не argv напрямую: при перезапуске через explorer.exe
+        // (обход package identity суррогата верхнего меню) пути приходят из temp-файла.
+        HandleLaunchArgs(App.LaunchPaths);
 
         Activated += async (_, _) => await RefreshTemplatesAsync();
         Activated += async (_, _) => await LoadCurrentUserOnceAsync();
@@ -242,6 +277,10 @@ public partial class MainWindow : Window
         CustomPromptBox.Visibility = isCustomPrompt ? Visibility.Visible : Visibility.Collapsed;
 
         UpdateObjectRootDisplay();
+
+        // Высота окна зависит от того, показано ли своё поле промпта / поле объекта —
+        // подгоняем после того, как их видимость выставлена выше.
+        ApplyCompactHeight();
     }
 
     private async void OnAddFilesClick(object sender, RoutedEventArgs e)
@@ -501,7 +540,7 @@ public partial class MainWindow : Window
         }
         _isExpanded = false;
 
-        var resizeTask = AnimateResizeAsync(CompactSize);
+        var resizeTask = AnimateResizeAsync(CurrentCompactSize);
         await FadeAsync(ExpandedRoot, 1, 0, 120);
         ExpandedRoot.Visibility = Visibility.Collapsed;
         CompactRoot.Opacity = 0;

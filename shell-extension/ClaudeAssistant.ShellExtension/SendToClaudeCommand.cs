@@ -124,7 +124,22 @@ public class SendToClaudeCommand : IExplorerCommand
         }
 
         var arguments = string.Join(" ", paths.Select(p => $"\"{p}\""));
-        Process.Start(new ProcessStartInfo(exePath, arguments) { UseShellExecute = true });
+
+        // Просто запускаем клиент. Из верхнего меню Windows 11 этот код исполняется
+        // в packaged-COM суррогате (dllhost с package identity нашего MSIX), и
+        // дочерний процесс наследует эту identity — но сам клиент это обнаруживает
+        // и перезапускает себя чистым процессом через explorer.exe (см.
+        // App.RelaunchIfForeignIdentity в клиенте). Из классического меню
+        // identity нет, клиент стартует напрямую. Поэтому здесь достаточно
+        // обычного Process.Start без каких-либо ухищрений с breakaway (он, как
+        // выяснилось, package identity всё равно не снимает).
+        Process.Start(
+            new ProcessStartInfo(exePath, arguments)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(exePath),
+            }
+        );
     }
 
     // Путь к клиенту пишется в реестр установщиком (сейчас — скриптом регистрации),
