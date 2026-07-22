@@ -19,19 +19,24 @@ public record HistoryEntry(
     string? AccessedFiles
 );
 
-public record ExecuteResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null);
+// ConversationId — если не null, ответ можно продолжить (ContinueAsync) в
+// пределах окна кэша (1 час). null — продолжение недоступно.
+public record ExecuteResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, Guid? ConversationId = null);
+
+// Expired=true — сессия истекла (410): продолжать нельзя, нужен новый запрос.
+public record ContinueResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, bool Expired = false);
 
 public record MeInfo(string? FullName, string? Role);
 
 public class BackendClient
 {
-    // Явный таймаут чуть больше, чем backend сам себе даёт на один вызов модели
-    // (240с, без повторов — см. ChatCompletionService, там же история, почему
-    // именно так). Без этого использовался бы стандартный HttpClient.Timeout =
-    // 100с — клиент сдавался бы раньше backend, причём именно на больших
-    // agentic-запросах, которым честно нужно больше времени (реальный инцидент —
-    // см. чеклист, Этап 11: 99с на ответ, 68k токенов, а клиент ничего не получил).
-    private readonly HttpClient _http = new() { BaseAddress = new Uri(AppConfig.BackendBaseUrl), Timeout = TimeSpan.FromSeconds(260) };
+    // Таймаут чуть больше, чем backend даёт на один вызов модели (900с — см.
+    // ChatCompletionService). Раньше было 260с, но с большими agentic-запросами
+    // (много файлов + веб-поиск) этого иногда не хватало. Теперь во время
+    // обработки клиент видит живой статус ("Думаю…", "Читаю: …") по SignalR,
+    // поэтому долгое ожидание — это видимый прогресс, а не "завис"; таймаут
+    // оставлен только как страховка и потому щедрый.
+    private readonly HttpClient _http = new() { BaseAddress = new Uri(AppConfig.BackendBaseUrl), Timeout = TimeSpan.FromSeconds(960) };
 
     public async Task<BindDeviceResult> BindDeviceAsync(string code, string token)
     {
@@ -150,7 +155,7 @@ public class BackendClient
             }
 
             var body = await response.Content.ReadFromJsonAsync<ExecuteResponseBody>();
-            return new ExecuteResult(true, body?.ResultText, null, body?.AccessedFiles);
+            return new ExecuteResult(true, body?.ResultText, null, body?.AccessedFiles, body?.ConversationId);
         }
         catch (HttpRequestException ex)
         {
@@ -172,6 +177,38 @@ public class BackendClient
         }
     }
 
+    // Продолжает диалог по conversationId (получен из ExecuteAsync). В пределах
+    // окна кэша (1 час) — иначе backend отвечает 410 и Expired=true.
+    public async Task<ContinueResult> ContinueAsync(Guid conversationId, string message)
+    {
+        AttachAuth();
+
+        try
+        {
+            var response = await _http.PostAsJsonAsync($"/api/requests/{conversationId}/continue", new { message });
+            if (response.StatusCode == System.Net.HttpStatusCode.Gone)
+            {
+                return new ContinueResult(false, null, "Сессия истекла — начните новый запрос", Expired: true);
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorText = await response.Content.ReadAsStringAsync();
+                return new ContinueResult(false, null, errorText);
+            }
+
+            var body = await response.Content.ReadFromJsonAsync<ContinueResponseBody>();
+            return new ContinueResult(true, body?.ResultText, null, body?.AccessedFiles);
+        }
+        catch (HttpRequestException ex)
+        {
+            return new ContinueResult(false, null, $"Сервер недоступен: {ex.Message}");
+        }
+        catch (TaskCanceledException)
+        {
+            return new ContinueResult(false, null, "Сервер долго не отвечает — попробуйте повторить запрос чуть позже.");
+        }
+    }
+
     private void AttachAuth()
     {
         if (TokenStorage.TryLoad(out var token))
@@ -182,5 +219,7 @@ public class BackendClient
 
     private record BindResponseBody(Guid DeviceId, string UserFullName, string UserRole);
 
-    private record ExecuteResponseBody(string ResultText, string? AccessedFiles);
+    private record ExecuteResponseBody(string ResultText, string? AccessedFiles, Guid? ConversationId);
+
+    private record ContinueResponseBody(string ResultText, string? AccessedFiles);
 }

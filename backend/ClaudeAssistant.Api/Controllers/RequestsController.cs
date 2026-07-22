@@ -1,12 +1,14 @@
 using System.Security.Claims;
 using ClaudeAssistant.Api.Data;
 using ClaudeAssistant.Api.Dtos;
+using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
 using ClaudeAssistant.Api.Services.AiCompletion;
 using ClaudeAssistant.Api.Services.FileTextExtraction;
 using ClaudeAssistant.Api.Services.ProjectFiles;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace ClaudeAssistant.Api.Controllers;
@@ -19,9 +21,18 @@ public class RequestsController(
     MultiFileExtractionService extractionService,
     ChatCompletionService chatCompletionService,
     SandboxedFileAccessService fileAccess,
+    ConversationStore conversationStore,
+    IHubContext<UpdatesHub> hub,
     ILogger<RequestsController> logger
 ) : ControllerBase
 {
+    // Живой статус обработки пушим пользователю по SignalR (best-effort, потеря
+    // события не влияет на ответ). IProgress.Report вызывается из agentic-цикла;
+    // отправку не ждём (fire-and-forget), чтобы не тормозить обработку.
+    private IProgress<string> BuildStatusReporter(Guid userId) =>
+        new Progress<string>(text =>
+            _ = hub.Clients.User(userId.ToString()).SendAsync(UpdatesHubEvents.RequestStatus, text)
+        );
     // Модель для запросов со своим промптом — шаблону взять её неоткуда, поэтому
     // статичная, как и везде в проекте пока не дошли до агрегирования по задачам
     // (см. PROJECT_PLAN.md, раздел 8.2).
@@ -165,49 +176,49 @@ public class RequestsController(
 
         try
         {
-            string resultText;
-            string? accessedFiles = null;
-
-            if (useFileSearch)
-            {
-                var agenticResult = await chatCompletionService.CompleteWithFileSearchAsync(
-                    model,
-                    systemPrompt,
-                    "Выполни задачу, описанную в системном промпте, и верни результат.",
-                    sandboxRoot!,
-                    userId,
-                    images
-                );
-                resultText = agenticResult.ResultText;
-                accessedFiles = agenticResult.AccessedFiles.Count > 0 ? string.Join(", ", agenticResult.AccessedFiles) : null;
-            }
-            else
-            {
-                resultText = await chatCompletionService.CompleteAsync(
-                    model,
-                    systemPrompt,
-                    "Выполни задачу, описанную в системном промпте, и верни результат.",
-                    images
-                );
-            }
-
-            db.RequestHistory.Add(
-                new RequestHistoryEntry
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = userId,
-                    TemplateId = template?.Id,
-                    CustomPromptText = template is null ? customPrompt : null,
-                    FileNames = fileNames,
-                    AccessedFiles = accessedFiles,
-                    Status = RequestStatus.Success,
-                    ResultText = resultText,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                }
+            // sandboxRoot != null — режим поиска по папке (инструменты); null —
+            // прикреплённые файлы. StartConversationAsync унифицирует оба и, на
+            // нативном пути, делает диалог продолжаемым (возвращает conversationId).
+            var (agenticResult, conversationId) = await chatCompletionService.StartConversationAsync(
+                model,
+                systemPrompt,
+                "Выполни задачу, описанную в системном промпте, и верни результат.",
+                useFileSearch ? sandboxRoot! : null,
+                userId,
+                images,
+                BuildStatusReporter(userId)
             );
+            var resultText = agenticResult.ResultText;
+            var accessedFiles = agenticResult.AccessedFiles.Count > 0 ? string.Join(", ", agenticResult.AccessedFiles) : null;
+
+            var historyEntry = new RequestHistoryEntry
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId,
+                TemplateId = template?.Id,
+                CustomPromptText = template is null ? customPrompt : null,
+                FileNames = fileNames,
+                AccessedFiles = accessedFiles,
+                Status = RequestStatus.Success,
+                ResultText = resultText,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            db.RequestHistory.Add(historyEntry);
             await db.SaveChangesAsync();
 
-            return Ok(new ExecuteResponse(resultText, accessedFiles));
+            // Привязываем запись истории к диалогу — чтобы follow-up'ы дописывали в
+            // неё полный тред (см. Continue). Только для продолжаемых (нативный путь).
+            if (conversationId is { } cid)
+            {
+                var state = conversationStore.Get(cid);
+                if (state is not null)
+                {
+                    state.HistoryEntryId = historyEntry.Id;
+                    conversationStore.Save(cid, state);
+                }
+            }
+
+            return Ok(new ExecuteResponse(resultText, accessedFiles, conversationId));
         }
         // Осознанные, понятные пользователю ошибки (например, пустой ответ модели
         // из-за слишком большого объёма данных объекта — см.
@@ -254,6 +265,71 @@ public class RequestsController(
             );
             await db.SaveChangesAsync();
 
+            return StatusCode(502, new ErrorResponse("Не удалось получить ответ от модели"));
+        }
+    }
+
+    // Продолжение диалога в пределах окна кэша (1 час). conversationId выдаётся в
+    // ответе на execute. Дописывает вопрос, гоняет тот же ход (с инструментами,
+    // если исходный запрос был поиском по папке), возвращает ответ. 410 — диалог
+    // истёк/не найден: продолжать нельзя, контекст выпал из кэша.
+    [HttpPost("{conversationId:guid}/continue")]
+    public async Task<ActionResult<ContinueResponse>> Continue(Guid conversationId, [FromBody] ContinueRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Message))
+        {
+            return BadRequest(new ErrorResponse("Пустое сообщение"));
+        }
+
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+        try
+        {
+            var result = await chatCompletionService.ContinueConversationAsync(
+                conversationId,
+                request.Message,
+                userId,
+                BuildStatusReporter(userId)
+            );
+            var accessedFiles = result.AccessedFiles.Count > 0 ? string.Join(", ", result.AccessedFiles) : null;
+
+            // Дописываем ход диалога в запись истории — так весь диалог сохраняется
+            // в БД и виден в истории даже после истечения окна кэша (продолжить
+            // будет нельзя, но перечитать — можно).
+            var state = conversationStore.Get(conversationId);
+            if (state?.HistoryEntryId is { } entryId)
+            {
+                var entry = await db.RequestHistory.FindAsync(entryId);
+                if (entry is not null)
+                {
+                    entry.ResultText =
+                        (entry.ResultText ?? "")
+                        + $"\n\n---\n\n**Вопрос:** {request.Message}\n\n{result.ResultText}";
+                    if (accessedFiles is not null)
+                    {
+                        entry.AccessedFiles = string.IsNullOrEmpty(entry.AccessedFiles)
+                            ? accessedFiles
+                            : $"{entry.AccessedFiles}, {accessedFiles}";
+                    }
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            return Ok(new ContinueResponse(result.ResultText, accessedFiles));
+        }
+        catch (ConversationNotFoundException)
+        {
+            return StatusCode(410, new ErrorResponse("Сессия истекла — начните новый запрос"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Осознанные ошибки модели (пустой ответ и т.п.) — как в execute.
+            logger.LogError(ex, "Не удалось продолжить диалог {ConversationId}", conversationId);
+            return StatusCode(502, new ErrorResponse(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Не удалось продолжить диалог {ConversationId}", conversationId);
             return StatusCode(502, new ErrorResponse("Не удалось получить ответ от модели"));
         }
     }

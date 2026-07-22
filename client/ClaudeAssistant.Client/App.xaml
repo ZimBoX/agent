@@ -17,6 +17,14 @@
             <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#1A1A1A" />
             <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#8A8A93" />
 
+            <!-- Пузыри чата: ответ модели — мягкая светлая карточка, вопрос
+                 пользователя — акцентный оттенок (светло-синий), чтобы визуально
+                 разделять роли и не выглядеть плоско. -->
+            <SolidColorBrush x:Key="ChatAssistantBrush" Color="#F4F5F7" />
+            <SolidColorBrush x:Key="ChatAssistantBorderBrush" Color="#ECECEF" />
+            <SolidColorBrush x:Key="ChatUserBrush" Color="#E8F1FB" />
+            <SolidColorBrush x:Key="ChatUserBorderBrush" Color="#D2E4F7" />
+
             <!-- Переопределяем системный акцент, чтобы ProgressRing/фокус-рамки и
                  прочие "родные" акцентные элементы WinUI сами подхватили наш синий,
                  без ручной перестилизации каждого контрола. -->

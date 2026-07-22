@@ -7,6 +7,12 @@ public static class UpdatesHubEvents
 {
     public const string TokenRevoked = "TokenRevoked";
     public const string UpdateAvailable = "UpdateAvailable";
+
+    // Живой статус обработки запроса ("Думаю…", "Читаю: …", "Просматриваю файлы…")
+    // — пушится пользователю, пока идёт долгий agentic-запрос, чтобы он видел
+    // прогресс, а не гадал, завис ли. Best-effort: доставка не гарантируется,
+    // потеря статуса не влияет на сам ответ.
+    public const string RequestStatus = "RequestStatus";
 }
 
 // Постоянное соединение клиента с сервером (раздел 9 плана): мгновенный разлогин при

@@ -15,31 +15,46 @@ namespace ClaudeAssistant.Client;
 // отформатированы в коде, чтобы не тащить форматирование дат в XAML-биндинги.
 public record HistoryListItem(string Title, string Subtitle, HistoryEntry Entry);
 
+// Сообщение в треде диалога (расширенный вид). IsUser — вопрос пользователя
+// (follow-up), иначе ответ модели. Свойства видимости — чтобы в одном
+// DataTemplate показывать нужный вариант пузыря без конвертеров/селектора.
+public sealed class ChatMessage(bool isUser, string text)
+{
+    public bool IsUser { get; } = isUser;
+    public string Text { get; } = text;
+    public Microsoft.UI.Xaml.Visibility UserVisibility =>
+        IsUser ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+    public Microsoft.UI.Xaml.Visibility AssistantVisibility =>
+        IsUser ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+}
+
 public partial class MainWindow : Window
 {
-    // Компактный вид имеет фиксированную ширину, но высота подстраивается под то,
-    // какие необязательные поля сейчас показаны: своё поле промпта (высокое) —
-    // окно выше; поле "объект" для поиска по папке — среднее; обычный шаблон без
-    // доп. полей — самое низкое. См. ApplyCompactHeight / OnTemplateSelectionChanged.
+    // Компактный вид имеет фиксированную ширину, а высота считается аддитивно:
+    // базовая (обычный шаблон без доп. полей) плюс добавка за каждое видимое
+    // необязательное поле — своё поле промпта и/или панель "объект" для поиска по
+    // папке (они могут быть показаны одновременно, например для "Свой промпт").
+    // См. ApplyCompactHeight / OnTemplateSelectionChanged.
     private const int CompactWidth = 380;
-    private const int CompactHeightTemplate = 560;
-    private const int CompactHeightObjectPanel = 630;
-    private const int CompactHeightCustomPrompt = 690;
+    private const int CompactHeightBase = 600;
+    private const int CompactHeightCustomPromptExtra = 90;
+    private const int CompactHeightObjectPanelExtra = 60;
     private static readonly SizeInt32 ExpandedSize = new(900, 640);
 
     private SizeInt32 CurrentCompactSize => new(CompactWidth, CurrentCompactHeight());
 
     private int CurrentCompactHeight()
     {
+        var height = CompactHeightBase;
         if (CustomPromptBox.Visibility == Visibility.Visible)
         {
-            return CompactHeightCustomPrompt;
+            height += CompactHeightCustomPromptExtra;
         }
         if (ObjectPanel.Visibility == Visibility.Visible)
         {
-            return CompactHeightObjectPanel;
+            height += CompactHeightObjectPanelExtra;
         }
-        return CompactHeightTemplate;
+        return height;
     }
 
     // Подгоняет высоту окна под текущий компактный контент — но только когда мы
@@ -55,9 +70,19 @@ public partial class MainWindow : Window
 
     private readonly BackendClient _backendClient = new();
     private readonly ObservableCollection<string> _filePaths = [];
+    private readonly ObservableCollection<ChatMessage> _thread = [];
     private List<HistoryEntry>? _historyCache;
     private bool _allowClose;
     private bool _isExpanded;
+    // true, пока идёт запрос к модели — по нему ShowLiveStatus решает, обновлять ли
+    // статус приходящими по SignalR событиями.
+    private bool _requestInFlight;
+
+    // Диалог, который можно продолжить (получен из ответа execute). null —
+    // продолжение недоступно (legacy-путь модели, просмотр из истории, или сессия
+    // истекла). _lastAnswerText — текст последнего ответа модели для Копировать/Сохранить.
+    private Guid? _conversationId;
+    private string _lastAnswerText = string.Empty;
 
     // Папка, с которой запустили/дозапустили клиент через ПКМ в Проводнике —
     // если задана, побеждает над папкой прикреплённого файла (см. GetCurrentObjectRoot).
@@ -102,6 +127,7 @@ public partial class MainWindow : Window
         };
 
         FilesList.ItemsSource = _filePaths;
+        ThreadList.ItemsSource = _thread;
 
         // Файлы и (максимум одна) папка, переданные при запуске — например, из shell
         // extension через ПКМ в Explorer. Папка — не файл, прикрепить её как документ
@@ -335,7 +361,11 @@ public partial class MainWindow : Window
         // Объект — необязателен, даже когда панель видна: можно по-прежнему просто
         // прикрепить файлы руками, не имея никакой определённой папки-объекта вовсе
         // (см. проверку "нужен хотя бы один источник" чуть ниже).
-        var objectFolder = template.AllowFileSearch ? GetCurrentObjectRoot() : null;
+        // Путь сетевого диска (X:\) конвертируем в UNC — бэкенд в другой сессии
+        // букв сетевых дисков не видит, а UNC от сессии не зависит (см.
+        // NetworkPathResolver).
+        var objectFolderRaw = template.AllowFileSearch ? GetCurrentObjectRoot() : null;
+        var objectFolder = objectFolderRaw is not null ? NetworkPathResolver.ToUncIfMapped(objectFolderRaw) : null;
 
         // В запрос уходят только отмеченные чекбоксом файлы — раньше здесь ошибочно
         // использовался весь _filePaths целиком, из-за чего неотмеченные файлы
@@ -372,12 +402,11 @@ public partial class MainWindow : Window
         BusyIndicator.IsActive = true;
         StatusText.Text = "Обрабатываем документ(ы)...";
 
-        // Поиск по объекту (и вообще запросы к модели) иногда занимает существенно
-        // дольше пары секунд — без промежуточного сообщения долгая, но абсолютно
-        // штатная обработка выглядит так же, как зависшее приложение (см. чеклист,
-        // Этап 11 — реальная жалоба пользователя на "завис ли он").
-        using var stillWorkingCts = new CancellationTokenSource();
-        _ = ShowStillWorkingAfterDelayAsync(stillWorkingCts.Token);
+        // Пока идёт запрос — показываем живой статус, приходящий с backend по
+        // SignalR ("Думаю…", "Читаю: договор.pdf" и т.п. — см. ShowLiveStatus).
+        // Раньше здесь был таймер "всё ещё обрабатываем" через 15с — теперь его
+        // заменил настоящий прогресс.
+        _requestInFlight = true;
 
         // Пока идёт запрос, автообновление не применяется (см. UpdateService) —
         // никогда не рвём работу пользователя посреди обработки.
@@ -390,7 +419,7 @@ public partial class MainWindow : Window
         finally
         {
             AppState.IsBusy = false;
-            stillWorkingCts.Cancel();
+            _requestInFlight = false;
         }
 
         BusyIndicator.IsActive = false;
@@ -405,7 +434,7 @@ public partial class MainWindow : Window
         StatusText.Text = string.IsNullOrEmpty(result.AccessedFiles)
             ? "Готово"
             : $"Готово · также просмотрено: {result.AccessedFiles}";
-        ResultBox.Text = result.ResultText ?? string.Empty;
+        StartThreadWithAnswer(result.ResultText ?? string.Empty, result.ConversationId);
 
         // Выполненный запрос попал в историю на сервере — раньше кэш сбрасывался,
         // но сам список никогда не перезапрашивался повторно, поэтому сайдбар
@@ -415,35 +444,130 @@ public partial class MainWindow : Window
         await LoadHistoryAsync();
     }
 
-    private async Task ShowStillWorkingAfterDelayAsync(CancellationToken token)
+    // Живой статус обработки, приходящий с backend по SignalR ("Думаю…",
+    // "Читаю: договор.pdf", "Просматриваю файлы…"). Показываем только пока идёт
+    // запрос — чтобы запоздавшее событие не перетёрло финальный "Готово".
+    public void ShowLiveStatus(string status)
     {
+        if (_requestInFlight && !string.IsNullOrWhiteSpace(status))
+        {
+            StatusText.Text = status;
+        }
+    }
+
+    // Начинает новый тред: первый элемент — ответ на исходный запрос. Если диалог
+    // продолжаем (conversationId != null) — показываем поле ввода follow-up.
+    private void StartThreadWithAnswer(string answer, Guid? conversationId)
+    {
+        _thread.Clear();
+        _lastAnswerText = answer;
+        _thread.Add(new ChatMessage(isUser: false, answer));
+        _conversationId = conversationId;
+        SetFollowUpAvailable(conversationId is not null, hint: null);
+        ScrollThreadToBottom();
+    }
+
+    private void SetFollowUpAvailable(bool available, string? hint)
+    {
+        FollowUpPanel.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        FollowUpHint.Visibility = string.IsNullOrEmpty(hint) ? Visibility.Collapsed : Visibility.Visible;
+        if (!string.IsNullOrEmpty(hint))
+        {
+            FollowUpHint.Text = hint;
+        }
+    }
+
+    private void ScrollThreadToBottom()
+    {
+        // Обновляем layout, чтобы ScrollableHeight учёл только что добавленное
+        // сообщение, и прокручиваем к последнему.
+        ThreadScroll.UpdateLayout();
+        ThreadScroll.ChangeView(null, ThreadScroll.ScrollableHeight, null);
+    }
+
+    // Enter — отправить (без Shift). AcceptsReturn=False, так что перевод строки в
+    // поле и так не вставляется; здесь просто вешаем на Enter отправку.
+    private void OnFollowUpKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter && FollowUpSend.IsEnabled)
+        {
+            e.Handled = true;
+            OnFollowUpSendClick(FollowUpSend, new RoutedEventArgs());
+        }
+    }
+
+    private async void OnFollowUpSendClick(object sender, RoutedEventArgs e)
+    {
+        var text = FollowUpBox.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || _conversationId is not { } conversationId)
+        {
+            return;
+        }
+
+        _thread.Add(new ChatMessage(isUser: true, text));
+        FollowUpBox.Text = string.Empty;
+        ScrollThreadToBottom();
+
+        FollowUpSend.IsEnabled = false;
+        FollowUpBox.IsEnabled = false;
+        BusyIndicator.IsActive = true;
+        StatusText.Text = "Обрабатываем...";
+        AppState.IsBusy = true;
+        _requestInFlight = true;
+
+        ContinueResult result;
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(15), token);
-            StatusText.Text = "Всё ещё обрабатываем — поиск по объекту или большие файлы иногда занимают несколько минут...";
+            result = await _backendClient.ContinueAsync(conversationId, text);
         }
-        catch (TaskCanceledException)
+        finally
         {
-            // Основной запрос уже завершился раньше 15 секунд — обновлять статус нечем.
+            AppState.IsBusy = false;
+            _requestInFlight = false;
+            BusyIndicator.IsActive = false;
         }
+
+        if (result.Expired)
+        {
+            _conversationId = null;
+            SetFollowUpAvailable(false, "Сессия истекла — начните новый запрос, чтобы снова работать с документами.");
+            StatusText.Text = "Сессия истекла";
+            return;
+        }
+
+        FollowUpSend.IsEnabled = true;
+        FollowUpBox.IsEnabled = true;
+
+        if (!result.Success)
+        {
+            StatusText.Text = $"Ошибка: {result.ErrorMessage}";
+            return;
+        }
+
+        _lastAnswerText = result.ResultText ?? string.Empty;
+        _thread.Add(new ChatMessage(isUser: false, _lastAnswerText));
+        StatusText.Text = string.IsNullOrEmpty(result.AccessedFiles)
+            ? "Готово"
+            : $"Готово · также просмотрено: {result.AccessedFiles}";
+        ScrollThreadToBottom();
     }
 
     private void OnCopyClick(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(ResultBox.Text))
+        if (string.IsNullOrEmpty(_lastAnswerText))
         {
             return;
         }
 
         var package = new DataPackage();
-        package.SetText(ResultBox.Text);
+        package.SetText(_lastAnswerText);
         Clipboard.SetContent(package);
         StatusText.Text = "Скопировано";
     }
 
     private async void OnSaveClick(object sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrEmpty(ResultBox.Text))
+        if (string.IsNullOrEmpty(_lastAnswerText))
         {
             return;
         }
@@ -462,7 +586,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        await Windows.Storage.FileIO.WriteTextAsync(file, ResultBox.Text);
+        await Windows.Storage.FileIO.WriteTextAsync(file, _lastAnswerText);
         StatusText.Text = "Сохранено";
     }
 
@@ -477,11 +601,39 @@ public partial class MainWindow : Window
         _historyCache ??= await _backendClient.GetHistoryAsync();
         HistoryList.ItemsSource = _historyCache?
             .Select(h => new HistoryListItem(
-                h.TemplateTitle,
-                $"{h.CreatedAt.LocalDateTime:dd.MM HH:mm} · {h.Status}",
+                // Заголовок — по сути ответа (первая осмысленная строка), а не
+                // общее "Свой промпт": так записи различимы. Категория (шаблон или
+                // "Свой промпт") и дата уходят в подпись.
+                DeriveHistoryTitle(h),
+                $"{h.TemplateTitle} · {h.CreatedAt.LocalDateTime:dd.MM HH:mm}",
                 h
             ))
             .ToList();
+    }
+
+    // Короткий заголовок для записи истории: первая непустая строка ответа,
+    // очищенная от markdown-разметки и обрезанная. Для неуспешных/пустых —
+    // название шаблона (или "Свой промпт") как запасной вариант.
+    private static string DeriveHistoryTitle(HistoryEntry h)
+    {
+        var source = !string.IsNullOrWhiteSpace(h.ResultText) ? h.ResultText : h.ErrorMessage;
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return h.TemplateTitle;
+        }
+
+        var firstLine = source
+            .Split('\n')
+            .Select(l => l.Trim().TrimStart('#', '*', '-', '>', ' ', '`').Trim())
+            .FirstOrDefault(l => l.Length > 0);
+        if (string.IsNullOrWhiteSpace(firstLine))
+        {
+            return h.TemplateTitle;
+        }
+
+        firstLine = firstLine.Replace("**", "").Replace("__", "");
+        const int maxLen = 52;
+        return firstLine.Length > maxLen ? firstLine[..maxLen].TrimEnd() + "…" : firstLine;
     }
 
     private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -491,7 +643,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        ResultBox.Text = item.Entry.ResultText ?? item.Entry.ErrorMessage ?? string.Empty;
+        // Запись из истории продолжить нельзя (диалог живёт только в памяти сервера
+        // в пределах окна кэша) — показываем как одиночный ответ без поля follow-up.
+        var text = item.Entry.ResultText ?? item.Entry.ErrorMessage ?? string.Empty;
+        StartThreadWithAnswer(text, conversationId: null);
         StatusText.Text = string.IsNullOrEmpty(item.Entry.AccessedFiles)
             ? $"Из истории: {item.Entry.CreatedAt.LocalDateTime:dd.MM.yyyy HH:mm}"
             : $"Из истории: {item.Entry.CreatedAt.LocalDateTime:dd.MM.yyyy HH:mm} · также просмотрено: {item.Entry.AccessedFiles}";

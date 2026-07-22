@@ -8,6 +8,9 @@ public class RealtimeService : IAsyncDisposable
 
     public event Action? TokenRevoked;
     public event Action? UpdateAvailable;
+    // Живой статус обработки запроса ("Думаю…", "Читаю: …") — приходит, пока идёт
+    // agentic-запрос. Best-effort, для отображения прогресса.
+    public event Action<string>? RequestStatus;
 
     public async Task StartAsync()
     {
@@ -26,6 +29,7 @@ public class RealtimeService : IAsyncDisposable
 
         _connection.On("TokenRevoked", () => TokenRevoked?.Invoke());
         _connection.On("UpdateAvailable", () => UpdateAvailable?.Invoke());
+        _connection.On<string>("RequestStatus", text => RequestStatus?.Invoke(text));
 
         try
         {

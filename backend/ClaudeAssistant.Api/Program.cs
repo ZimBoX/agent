@@ -97,6 +97,10 @@ builder.Services.AddScoped<MultiFileExtractionService>();
 builder.Services.AddScoped<ChatCompletionService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<SandboxedFileAccessService>();
+// Продолжаемые диалоги живут в памяти (окно = TTL кэша Anthropic, 1 час) —
+// стор Singleton, чтобы состояние переживало отдельные HTTP-запросы.
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<ConversationStore>();
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddCascadingAuthenticationState();

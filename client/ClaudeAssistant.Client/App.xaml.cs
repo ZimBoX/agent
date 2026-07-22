@@ -247,6 +247,9 @@ public partial class App : Application
         _realtime = new RealtimeService();
         _realtime.TokenRevoked += OnTokenRevoked;
         _realtime.UpdateAvailable += OnUpdateAvailable;
+        // Живой статус обработки приходит не на UI-потоке — маршалим в окно.
+        _realtime.RequestStatus += status =>
+            _dispatcherQueue?.TryEnqueue(() => _mainWindow?.ShowLiveStatus(status));
         _ = _realtime.StartAsync();
 
         _updateService = new UpdateService();
