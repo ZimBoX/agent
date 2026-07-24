@@ -8,6 +8,7 @@ namespace ClaudeAssistant.Client;
 public partial class App : Application
 {
     private MainWindow? _mainWindow;
+    private ChatWindow? _chatWindow;
     private EnrollmentWindow? _enrollmentWindow;
     private TrayIconService? _trayIcon;
     private RealtimeService? _realtime;
@@ -235,6 +236,7 @@ public partial class App : Application
         };
 
         _mainWindow.LogoutRequested += OnTokenRevoked;
+        _mainWindow.ChatRequested += OpenChatWindow;
 
         // Второй и последующие запуски (из Проводника, пока клиент уже открыт)
         // приходят сюда через именованный канал вместо создания нового процесса
@@ -302,6 +304,24 @@ public partial class App : Application
 
         Directory.CreateDirectory(Path.GetDirectoryName(versionFilePath)!);
         File.WriteAllText(versionFilePath, currentVersion);
+    }
+
+    // Открывает (или показывает уже созданное) отдельное окно чата. Вызывается на
+    // UI-потоке из MainWindow.ChatRequested. ChatWindow подписывается на живые
+    // токены через переданный RealtimeService.
+    private void OpenChatWindow()
+    {
+        if (_realtime is null)
+        {
+            return;
+        }
+        if (_chatWindow is null)
+        {
+            _chatWindow = new ChatWindow(_realtime);
+            _chatWindow.Closed += (_, _) => _chatWindow = null;
+        }
+        _chatWindow.AppWindow.Show();
+        _chatWindow.Activate();
     }
 
     private void OnTokenRevoked()

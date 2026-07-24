@@ -12,6 +12,10 @@ public class RealtimeService : IAsyncDisposable
     // agentic-запрос. Best-effort, для отображения прогресса.
     public event Action<string>? RequestStatus;
 
+    // Режим чата: токены ответа модели по мере генерации. Аргументы —
+    // (conversationId, кусок текста).
+    public event Action<Guid, string>? ChatToken;
+
     public async Task StartAsync()
     {
         if (!TokenStorage.TryLoad(out var token))
@@ -30,6 +34,7 @@ public class RealtimeService : IAsyncDisposable
         _connection.On("TokenRevoked", () => TokenRevoked?.Invoke());
         _connection.On("UpdateAvailable", () => UpdateAvailable?.Invoke());
         _connection.On<string>("RequestStatus", text => RequestStatus?.Invoke(text));
+        _connection.On<Guid, string>("ChatToken", (conversationId, token) => ChatToken?.Invoke(conversationId, token));
 
         try
         {

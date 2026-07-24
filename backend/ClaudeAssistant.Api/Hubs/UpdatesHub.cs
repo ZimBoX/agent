@@ -13,6 +13,10 @@ public static class UpdatesHubEvents
     // прогресс, а не гадал, завис ли. Best-effort: доставка не гарантируется,
     // потеря статуса не влияет на сам ответ.
     public const string RequestStatus = "RequestStatus";
+
+    // Режим чата: токены ответа модели по мере генерации (стриминг). Аргументы —
+    // (conversationId, кусок текста). Best-effort, как и RequestStatus.
+    public const string ChatToken = "ChatToken";
 }
 
 // Постоянное соединение клиента с сервером (раздел 9 плана): мгновенный разлогин при

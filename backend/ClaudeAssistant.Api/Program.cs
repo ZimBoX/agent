@@ -95,6 +95,7 @@ builder.Services.AddSignalR();
 builder.Services.AddScoped<FileTextExtractor>();
 builder.Services.AddScoped<MultiFileExtractionService>();
 builder.Services.AddScoped<ChatCompletionService>();
+builder.Services.AddScoped<ChatService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<SandboxedFileAccessService>();
 // Продолжаемые диалоги живут в памяти (окно = TTL кэша Anthropic, 1 час) —

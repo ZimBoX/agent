@@ -129,6 +129,9 @@ public partial class MainWindow : Window
     // переиспользует тот же переход на экран привязки.
     public event Action? LogoutRequested;
 
+    // Клик по кнопке чата в шапке — App открывает отдельное окно ChatWindow.
+    public event Action? ChatRequested;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -657,6 +660,8 @@ public partial class MainWindow : Window
         await Windows.Storage.FileIO.WriteTextAsync(file, _lastAnswerText);
         StatusText.Text = "Сохранено";
     }
+
+    private void OnChatClick(object sender, RoutedEventArgs e) => ChatRequested?.Invoke();
 
     private async void OnHistoryClick(object sender, RoutedEventArgs e)
     {

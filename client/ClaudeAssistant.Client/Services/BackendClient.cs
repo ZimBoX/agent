@@ -28,6 +28,12 @@ public record ContinueResult(bool Success, string? ResultText, string? ErrorMess
 
 public record MeInfo(string? FullName, string? Role);
 
+public record ChatConversationInfo(Guid Id, string Title, DateTimeOffset UpdatedAt);
+
+public record ChatMessageInfo(bool IsUser, string Text, DateTimeOffset CreatedAt);
+
+public record ChatSendResult(bool Success, Guid ConversationId, string? Title, string? Reply, string? ErrorMessage);
+
 public class BackendClient
 {
     // Таймаут чуть больше, чем backend даёт на один вызов модели (900с — см.
@@ -209,6 +215,56 @@ public class BackendClient
         }
     }
 
+    // ===== Режим чата =====
+
+    public async Task<List<ChatConversationInfo>?> GetChatConversationsAsync()
+    {
+        AttachAuth();
+        var response = await _http.GetAsync("/api/chat/conversations");
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+        return await response.Content.ReadFromJsonAsync<List<ChatConversationInfo>>();
+    }
+
+    public async Task<List<ChatMessageInfo>?> GetChatMessagesAsync(Guid conversationId)
+    {
+        AttachAuth();
+        var response = await _http.GetAsync($"/api/chat/conversations/{conversationId}/messages");
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+        return await response.Content.ReadFromJsonAsync<List<ChatMessageInfo>>();
+    }
+
+    // Ответ приходит целиком по завершении (авторитетный текст); токены по мере
+    // генерации — отдельно по SignalR (RealtimeService.ChatToken).
+    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text)
+    {
+        try
+        {
+            AttachAuth();
+            var response = await _http.PostAsJsonAsync("/api/chat/send", new { conversationId, text });
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorText = await response.Content.ReadAsStringAsync();
+                return new ChatSendResult(false, Guid.Empty, null, null, errorText);
+            }
+            var body = await response.Content.ReadFromJsonAsync<ChatSendResponseBody>();
+            return new ChatSendResult(true, body!.ConversationId, body.Title, body.Reply, null);
+        }
+        catch (HttpRequestException ex)
+        {
+            return new ChatSendResult(false, Guid.Empty, null, null, $"Сервер недоступен: {ex.Message}");
+        }
+        catch (TaskCanceledException)
+        {
+            return new ChatSendResult(false, Guid.Empty, null, null, "Сервер долго не отвечает — попробуйте повторить чуть позже.");
+        }
+    }
+
     private void AttachAuth()
     {
         if (TokenStorage.TryLoad(out var token))
@@ -216,6 +272,8 @@ public class BackendClient
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
     }
+
+    private record ChatSendResponseBody(Guid ConversationId, string Title, string Reply);
 
     private record BindResponseBody(Guid DeviceId, string UserFullName, string UserRole);
 

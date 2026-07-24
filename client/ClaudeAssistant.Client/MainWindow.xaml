@@ -39,13 +39,23 @@
                     <TextBlock x:Name="UserRoleText" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
                 </StackPanel>
 
-                <Button Grid.Column="2" x:Name="HistoryButton" Click="OnHistoryClick" Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8">
-                    <Grid Width="18" Height="18">
-                        <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        <Line X1="9" Y1="9" X2="9" Y2="4.5" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                        <Line X1="9" Y1="9" X2="11.8" Y2="11" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                    </Grid>
-                </Button>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
+                    <Button x:Name="ChatButton" Click="OnChatClick" Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8"
+                            ToolTipService.ToolTip="Чат">
+                        <!-- Пузырёк-облачко чата -->
+                        <Path Data="M 3,3 H 15 A 2,2 0 0 1 17,5 V 11 A 2,2 0 0 1 15,13 H 8 L 4,16 V 13 A 2,2 0 0 1 2,11 V 5 A 2,2 0 0 1 3,3 Z"
+                              Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4"
+                              StrokeLineJoin="Round" Width="18" Height="18" Stretch="Uniform" />
+                    </Button>
+                    <Button x:Name="HistoryButton" Click="OnHistoryClick" Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8"
+                            ToolTipService.ToolTip="История">
+                        <Grid Width="18" Height="18">
+                            <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="16" Height="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Line X1="9" Y1="9" X2="9" Y2="4.5" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <Line X1="9" Y1="9" X2="11.8" Y2="11" Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        </Grid>
+                    </Button>
+                </StackPanel>
             </Grid>
 
             <!-- Шаблон -->
