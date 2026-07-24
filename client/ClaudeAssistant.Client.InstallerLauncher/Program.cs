@@ -13,7 +13,7 @@ using System.Diagnostics;
 // ClaudeAssistant.Client-<ch>-Setup.exe, backend отдаёт его как статику из
 // /releases (см. Program.cs бэкенда, UseStaticFiles для ReleasesPath).
 
-const string backendBaseUrl = "http://localhost:5149";
+const string backendBaseUrl = "http://192.168.0.15:5149";
 const string channel = "beta";
 var setupUrl = $"{backendBaseUrl}/releases/ClaudeAssistant.Client-{channel}-Setup.exe";
 
