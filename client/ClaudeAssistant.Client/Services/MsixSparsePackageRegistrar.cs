@@ -57,6 +57,40 @@ public static class MsixSparsePackageRegistrar
         }
     }
 
+    // Повторная регистрация sparse-пакета на ОБНОВЛЕНИИ. Velopack при апдейте
+    // заменяет файлы приложения (comhost.dll и папку current), и привязка уже
+    // зарегистрированного sparse-пакета к ним становится нерабочей — пункт верхнего
+    // уровня меню Windows 11 пропадает, пока не выполнен повторный Add-AppxPackage
+    // (тот же симптом ловился и при ручной переустановке, см. InstallerLauncher).
+    //
+    // В отличие от Register(): (1) НЕ трогаем LocalMachine-сертификат и HKLM
+    // AppModelUnlock — они выставлены при установке и переживают обновления, значит
+    // элевация/UAC здесь НЕ нужны (per-user Add-AppxPackage прав администратора не
+    // требует, когда сертификат уже доверен и sideload включён); (2) НЕ пропускаем
+    // по IsAlreadyRegistered — смысл именно в том, чтобы освежить привязку у уже
+    // зарегистрированного пакета к новым файлам. Тихо и без UAC, поэтому подходит
+    // для каждого автообновления.
+    public static void ReRegister()
+    {
+        try
+        {
+            var installDir = AppContext.BaseDirectory;
+            var msixPath = Path.Combine(installDir, "ShellExtension", "ClaudeAssistant.ShellExtension.msix");
+
+            if (!File.Exists(msixPath))
+            {
+                return;
+            }
+
+            RunHidden($"Add-AppxPackage -Path \"{msixPath}\" -ExternalLocation \"{installDir}\"");
+        }
+        catch (Exception)
+        {
+            // Верхний уровень меню — украшение поверх работающего классического
+            // пункта; сбой перерегистрации не критичен для работы приложения.
+        }
+    }
+
     // Вызывается из OnBeforeUninstallFastCallback — без этого удаление через
     // "Установка и удаление программ" оставляло бы зарегистрированный
     // sparse-пакет и доверенный сертификат висеть в системе даже после

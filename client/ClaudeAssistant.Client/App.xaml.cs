@@ -140,11 +140,13 @@ public partial class App : Application
         // ShellExtensionRegistrar (HKCU, прав администратора не требует) —
         // срабатывает и на установку, и на каждое обновление (например, если
         // версия comhost.dll в поставке изменилась) — идемпотентно, повторный
-        // вызов безопасен. MsixSparsePackageRegistrar — только на install:
-        // требует LocalMachine-хранилище сертификатов и сам запрашивает свой
-        // UAC (см. комментарий в файле — install-hook MSI оказался
-        // неэлевированным на практике), а дёргать UAC при каждом тихом
-        // автообновлении было бы неожиданно для пользователя.
+        // вызов безопасен. MsixSparsePackageRegistrar.Register() — только на
+        // install: требует LocalMachine-хранилище сертификатов + HKLM AppModelUnlock
+        // и запрашивает свой UAC, а дёргать его при каждом тихом автообновлении было
+        // бы неожиданно. Но на апдейте нужна ReRegister() — Velopack заменяет файлы,
+        // и привязка sparse-пакета рвётся (пункт верхнего меню пропадает); ReRegister
+        // делает только per-user Add-AppxPackage (сертификат/AppModelUnlock уже
+        // выставлены при установке и переживают апдейты), поэтому UAC не требуется.
         // OnBeforeUninstallFastCallback — обратная операция: без неё удаление
         // через "Установка и удаление программ" сносило бы только то, что
         // поставил сам Velopack, а наши собственные ключи реестра и
@@ -155,7 +157,11 @@ public partial class App : Application
                 ShellExtensionRegistrar.Register();
                 MsixSparsePackageRegistrar.Register();
             })
-            .OnAfterUpdateFastCallback(_ => ShellExtensionRegistrar.Register())
+            .OnAfterUpdateFastCallback(_ =>
+            {
+                ShellExtensionRegistrar.Register();
+                MsixSparsePackageRegistrar.ReRegister();
+            })
             .OnBeforeUninstallFastCallback(_ =>
             {
                 ShellExtensionRegistrar.Unregister();
