@@ -18,14 +18,46 @@ public record HistoryListItem(string Title, string Subtitle, HistoryEntry Entry)
 // Сообщение в треде диалога (расширенный вид). IsUser — вопрос пользователя
 // (follow-up), иначе ответ модели. Свойства видимости — чтобы в одном
 // DataTemplate показывать нужный вариант пузыря без конвертеров/селектора.
-public sealed class ChatMessage(bool isUser, string text)
+public sealed class ChatMessage : System.ComponentModel.INotifyPropertyChanged
 {
-    public bool IsUser { get; } = isUser;
-    public string Text { get; } = text;
+    public ChatMessage(bool isUser, string text, bool isPending = false)
+    {
+        IsUser = isUser;
+        IsPending = isPending;
+        _text = text;
+    }
+
+    public bool IsUser { get; }
+
+    // Пузырь "печатает…": карточка ассистента с индикатором и живым статусом
+    // ("Думаю…", "Читаю: договор.pdf"), пока идёт ответ. Текст обновляется по
+    // SignalR (ShowLiveStatus), поэтому Text — с уведомлением; по готовности пузырь
+    // убирается из треда и заменяется настоящим ответом.
+    public bool IsPending { get; }
+
+    private string _text;
+    public string Text
+    {
+        get => _text;
+        set
+        {
+            if (_text == value)
+            {
+                return;
+            }
+            _text = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Text)));
+        }
+    }
+
     public Microsoft.UI.Xaml.Visibility UserVisibility =>
         IsUser ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
     public Microsoft.UI.Xaml.Visibility AssistantVisibility =>
-        IsUser ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+        !IsUser && !IsPending ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+    public Microsoft.UI.Xaml.Visibility PendingVisibility =>
+        IsPending ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 public partial class MainWindow : Window
@@ -71,6 +103,9 @@ public partial class MainWindow : Window
     private readonly BackendClient _backendClient = new();
     private readonly ObservableCollection<string> _filePaths = [];
     private readonly ObservableCollection<ChatMessage> _thread = [];
+    // Пузырь "печатает…" в треде, пока идёт ответ (см. AddPendingBubble). null —
+    // когда запрос не выполняется.
+    private ChatMessage? _pending;
     private List<HistoryEntry>? _historyCache;
     private bool _allowClose;
     private bool _isExpanded;
@@ -452,6 +487,30 @@ public partial class MainWindow : Window
         if (_requestInFlight && !string.IsNullOrWhiteSpace(status))
         {
             StatusText.Text = status;
+            // Тот же живой статус — в пузыре "печатает…" внутри треда (расширенный
+            // вид), где нижняя строка StatusText не видна.
+            if (_pending is not null)
+            {
+                _pending.Text = status;
+            }
+        }
+    }
+
+    // Добавляет в тред пузырь "печатает…" (индикатор + живой статус) на время
+    // ответа. Убирается через RemovePendingBubble по завершении запроса.
+    private void AddPendingBubble()
+    {
+        _pending = new ChatMessage(isUser: false, "Думаю…", isPending: true);
+        _thread.Add(_pending);
+        ScrollThreadToBottom();
+    }
+
+    private void RemovePendingBubble()
+    {
+        if (_pending is not null)
+        {
+            _thread.Remove(_pending);
+            _pending = null;
         }
     }
 
@@ -460,6 +519,7 @@ public partial class MainWindow : Window
     private void StartThreadWithAnswer(string answer, Guid? conversationId)
     {
         _thread.Clear();
+        _pending = null;
         _lastAnswerText = answer;
         _thread.Add(new ChatMessage(isUser: false, answer));
         _conversationId = conversationId;
@@ -506,7 +566,9 @@ public partial class MainWindow : Window
 
         _thread.Add(new ChatMessage(isUser: true, text));
         FollowUpBox.Text = string.Empty;
-        ScrollThreadToBottom();
+        // Пузырь "печатает…" в треде — чтобы было видно, что идёт обработка (нижняя
+        // строка статуса в расширенном виде не видна).
+        AddPendingBubble();
 
         FollowUpSend.IsEnabled = false;
         FollowUpBox.IsEnabled = false;
@@ -527,6 +589,9 @@ public partial class MainWindow : Window
             BusyIndicator.IsActive = false;
         }
 
+        // Запрос завершён (любым исходом) — убираем пузырь "печатает…".
+        RemovePendingBubble();
+
         if (result.Expired)
         {
             _conversationId = null;
@@ -541,6 +606,9 @@ public partial class MainWindow : Window
         if (!result.Success)
         {
             StatusText.Text = $"Ошибка: {result.ErrorMessage}";
+            // Дублируем ошибку пузырём в треде — в расширенном виде StatusText не виден.
+            _thread.Add(new ChatMessage(isUser: false, $"⚠️ Ошибка: {result.ErrorMessage}"));
+            ScrollThreadToBottom();
             return;
         }
 

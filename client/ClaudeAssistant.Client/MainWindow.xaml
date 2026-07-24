@@ -219,6 +219,18 @@
                                                                          LinkForeground="{StaticResource AppAccentBrush}" />
                                         </StackPanel>
                                     </Border>
+                                    <!-- Обработка запроса: карточка ассистента с индикатором и живым
+                                         статусом ("Думаю…", "Читаю: договор.pdf"); заменяется ответом
+                                         по готовности (см. MainWindow.AddPendingBubble). -->
+                                    <Border Visibility="{x:Bind PendingVisibility}" HorizontalAlignment="Stretch"
+                                            Background="{StaticResource ChatAssistantBrush}" BorderBrush="{StaticResource ChatAssistantBorderBrush}"
+                                            BorderThickness="1" CornerRadius="14" Padding="18,14">
+                                        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                            <ProgressRing IsActive="True" Width="18" Height="18" Foreground="{StaticResource AppAccentBrush}" />
+                                            <TextBlock Text="{x:Bind Text, Mode=OneWay}" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource AppTextSecondaryBrush}" FontSize="14" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
                                     <!-- Вопрос пользователя: компактный акцентный пузырь справа -->
                                     <Border Visibility="{x:Bind UserVisibility}" HorizontalAlignment="Right" MaxWidth="560"
                                             Background="{StaticResource ChatUserBrush}" BorderBrush="{StaticResource ChatUserBorderBrush}"
