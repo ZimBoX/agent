@@ -70,6 +70,29 @@ public static class MsixSparsePackageRegistrar
     // по IsAlreadyRegistered — смысл именно в том, чтобы освежить привязку у уже
     // зарегистрированного пакета к новым файлам. Тихо и без UAC, поэтому подходит
     // для каждого автообновления.
+    // Путь диагностического лога перерегистрации — %LocalAppData%\ClaudeAssistant\
+    // menu-register.log. Временное: пока выясняем, почему Add-AppxPackage,
+    // порождённый процессом приложения, не срабатывает, тогда как та же команда
+    // из обычного PowerShell в сессии пользователя — срабатывает.
+    private static string LogPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ClaudeAssistant",
+        "menu-register.log"
+    );
+
+    private static void Log(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Лог — best-effort, его сбой не должен ничего ронять.
+        }
+    }
+
     public static void ReRegister()
     {
         try
@@ -77,17 +100,37 @@ public static class MsixSparsePackageRegistrar
             var installDir = AppContext.BaseDirectory;
             var msixPath = Path.Combine(installDir, "ShellExtension", "ClaudeAssistant.ShellExtension.msix");
 
+            Log($"ReRegister start: installDir={installDir}; msixExists={File.Exists(msixPath)}; elevated={IsElevated()}");
+
             if (!File.Exists(msixPath))
             {
+                Log("ReRegister: msix не найден — выход");
                 return;
             }
 
-            RunHidden($"Add-AppxPackage -Path \"{msixPath}\" -ExternalLocation \"{installDir}\"");
+            // Одинарные кавычки вокруг путей внутри -Command, чтобы не мучиться с
+            // экранированием (пути в %LocalAppData% без кавычек тоже обычно ок).
+            var psi = new ProcessStartInfo("powershell.exe")
+            {
+                Arguments =
+                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
+                    + $"\"Add-AppxPackage -Path '{msixPath}' -ExternalLocation '{installDir}'\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+
+            using var process = Process.Start(psi);
+            var stdout = process?.StandardOutput.ReadToEnd();
+            var stderr = process?.StandardError.ReadToEnd();
+            process?.WaitForExit(60_000);
+
+            Log($"ReRegister done: exit={process?.ExitCode}; stdout={stdout?.Trim()}; stderr={stderr?.Trim()}");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Верхний уровень меню — украшение поверх работающего классического
-            // пункта; сбой перерегистрации не критичен для работы приложения.
+            Log($"ReRegister EXCEPTION: {ex}");
         }
     }
 
