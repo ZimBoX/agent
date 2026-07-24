@@ -10,6 +10,26 @@
 > Осознанно отложено. Всё остальное (чат, вложения, админка, автообновление
 > клиента) работает.
 
+## 0. Docker Hub заблокирован/троттлится (РФ-сеть) — зеркало
+
+На нашем сервере API Docker Hub (`registry-1.docker.io`) отвечает, но блобы-слои
+идут с CloudFront (`108.156.x`) и **таймаутятся** — пул `postgres:16` вис на 0 Б.
+`mcr.microsoft.com` (образы .NET) при этом доступен напрямую. Лечится зеркалом
+Docker Hub (подменяет только `docker.io`-образы, т.е. `postgres`):
+
+```bash
+sudo mkdir -p /etc/docker
+sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+{
+  "registry-mirrors": ["https://dockerhub.timeweb.cloud"]
+}
+JSON
+sudo systemctl restart docker
+docker pull postgres:16    # проверка: должен скачаться за секунды
+```
+
+Если `docker pull postgres:16` идёт нормально — этот шаг не нужен.
+
 ## 1. Установить Docker на сервере (однократно)
 
 ```bash
@@ -73,6 +93,14 @@ cd deploy && docker compose up -d --build
 
 Затем собрать клиент через **VS MSBuild** (не `dotnet build` — баг с `.pri`, см.
 `ПЕРЕЕЗД.md`) и залить билд через админку `/admin`.
+
+## Необязательное усиление
+
+- **DataProtection-ключи** сейчас лежат внутри контейнера
+  (`/root/.aspnet/DataProtection-Keys`) и теряются при пересоздании — после
+  каждого `up --build` админам придётся перелогиниться (device-токены клиентов
+  это не затрагивает, они в БД). Чтобы сохранять между пересборками, добавить том
+  в `docker-compose.yml`: `- dpkeys:/root/.aspnet/DataProtection-Keys`.
 
 ## Бэкапы БД (по плану, Этап 12)
 
