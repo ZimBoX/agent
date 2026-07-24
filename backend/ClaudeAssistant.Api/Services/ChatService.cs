@@ -26,11 +26,15 @@ public class ChatService(
     private const int TimeoutSeconds = 300;
     private const int MaxRetries = 2;
     private const int TitleMaxLength = 48;
+    private const int MaxWebSearchUses = 3;
 
     private const string SystemPrompt =
         "Ты — дружелюбный помощник в режиме чата внутреннего корпоративного приложения. "
         + "Отвечай по-русски, ясно и по делу. Если вопрос из строительной/подрядной сферы "
-        + "(договоры, сметы, ТЗ, акты) — учитывай эту специфику.";
+        + "(договоры, сметы, ТЗ, акты) — учитывай эту специфику. "
+        + "У тебя есть инструмент веб-поиска (web_search) — используй его, когда нужна "
+        + "свежая или актуальная информация из интернета (погода, новости, курсы и т.п.), "
+        + "а не отвечай, что доступа к интернету нет.";
 
     private string Model => configuration["Chat:Model"] ?? "claude-haiku-4.5";
 
@@ -137,11 +141,15 @@ public class ChatService(
     )
     {
         var client = CreateClient();
+        // web_search — серверный инструмент Anthropic: агрегатор его поддерживает
+        // (как и в основном потоке, см. ChatCompletionService.RunTurnNative).
+        // Выполняется внутри одного вызова, отдельного tool-loop не требует.
         var parameters = new MessageCreateParams
         {
             Model = model,
             MaxTokens = MaxOutputTokens,
             System = new List<TextBlockParam> { new() { Text = SystemPrompt } },
+            Tools = new List<ToolUnion> { new WebSearchTool20250305 { MaxUses = MaxWebSearchUses } },
             Messages = messages,
         };
 
@@ -164,10 +172,18 @@ public class ChatService(
         {
             throw;
         }
-        catch (Exception ex) when (sb.Length == 0)
+        catch (Exception ex) when (sb.Length > 0)
         {
-            // Стриминг не пошёл (например, агрегатор не отдаёт SSE на этом маршруте) —
-            // делаем обычный вызов и отдаём ответ целиком одним "токеном".
+            // Стрим оборвался ПОСЛЕ того, как часть/весь текст уже пришёл (например,
+            // редкий upstream api_error в самом конце ответа с web_search) — отдаём
+            // накопленное как ответ, не роняя запрос.
+            logger.LogWarning(ex, "Стрим чата оборвался после части текста — отдаём накопленное");
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            // Совсем ничего не пришло (агрегатор не отдал SSE) — откат на обычный
+            // запрос-ответ, ответ отдаём одним "токеном".
             logger.LogWarning(ex, "Стриминг чата не удался — откат на обычный запрос-ответ");
             var response = await client.Messages.Create(parameters, cancellationToken);
             var full = ExtractText(response);
