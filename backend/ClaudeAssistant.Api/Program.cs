@@ -107,6 +107,16 @@ builder.Services.AddCascadingAuthenticationState();
 
 var app = builder.Build();
 
+// Применяем миграции EF Core при старте. На сервере бэкенд едет в Docker-контейнере,
+// где нет `dotnet ef` под рукой, а Postgres поднимается пустым контейнером — без этого
+// шага схемы бы не было и всё падало бы 500. Идемпотентно: EF накатывает только
+// недостающие миграции, на уже актуальной БД (в т.ч. локальной dev) — no-op.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
+}
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {

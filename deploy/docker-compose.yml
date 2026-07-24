@@ -1,0 +1,56 @@
+# Продакшн-развёртывание на сервере (Ubuntu 24.04). Поднимает Postgres и бэкенд.
+# Секреты и настройки берутся из файла .env рядом (см. .env.example).
+#
+#   cd deploy && docker compose up -d --build
+#
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: claude_assistant
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Бэкенд накатывает миграции при старте — стартовать он должен только после
+      # того, как Postgres реально готов принимать соединения, иначе Migrate() падает.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d claude_assistant"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Строка подключения к контейнеру Postgres (хост = имя сервиса compose).
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=claude_assistant;Username=postgres;Password=${POSTGRES_PASSWORD:-devpassword}"
+      # Агрегатор (в Production этих ключей нет в appsettings.json — задаём тут).
+      Aggregator__BaseUrl: "https://api.aitunnel.ru/v1"
+      Aggregator__NativeBaseUrl: "https://api.aitunnel.ru"
+      Aggregator__UseNativeSdk: "true"
+      # Секреты — из .env (обязательны, поднятие упадёт, если не заданы).
+      AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:?AITUNNEL_API_KEY не задан в .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD не задан в .env}
+    ports:
+      - "5149:5149"
+    volumes:
+      # Загруженные через админку билды клиента (release-фид Velopack) должны
+      # переживать пересоздание контейнера.
+      - releases_data:/app/releases
+      # Файловые логи Serilog (LocalApplicationData у root внутри контейнера).
+      - backend_logs:/root/.local/share/ClaudeAssistant/backend-logs
+
+volumes:
+  postgres_data:
+  releases_data:
+  backend_logs:

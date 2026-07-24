@@ -1,0 +1,7 @@
+# Контекст сборки — корень репозитория, но образу нужен только backend/.
+# Без этого фильтра в демон Docker улетели бы сотни МБ (release-*.zip, releases-local/,
+# client bin/obj и т.д.).
+*
+!backend/
+backend/**/bin/
+backend/**/obj/
