@@ -143,10 +143,10 @@ public partial class App : Application
         // вызов безопасен. MsixSparsePackageRegistrar.Register() — только на
         // install: требует LocalMachine-хранилище сертификатов + HKLM AppModelUnlock
         // и запрашивает свой UAC, а дёргать его при каждом тихом автообновлении было
-        // бы неожиданно. Но на апдейте нужна ReRegister() — Velopack заменяет файлы,
-        // и привязка sparse-пакета рвётся (пункт верхнего меню пропадает); ReRegister
-        // делает только per-user Add-AppxPackage (сертификат/AppModelUnlock уже
-        // выставлены при установке и переживают апдейты), поэтому UAC не требуется.
+        // бы неожиданно. Обновление рвёт привязку sparse-пакета (пункт верхнего меню
+        // пропадает), но перерегистрацию делаем НЕ здесь и не в апдейт-хуке (там
+        // Add-AppxPackage не срабатывает — см. NotifyIfJustUpdated), а на обычном
+        // старте при обнаружении смены версии.
         // OnBeforeUninstallFastCallback — обратная операция: без неё удаление
         // через "Установка и удаление программ" сносило бы только то, что
         // поставил сам Velopack, а наши собственные ключи реестра и
@@ -157,11 +157,7 @@ public partial class App : Application
                 ShellExtensionRegistrar.Register();
                 MsixSparsePackageRegistrar.Register();
             })
-            .OnAfterUpdateFastCallback(_ =>
-            {
-                ShellExtensionRegistrar.Register();
-                MsixSparsePackageRegistrar.ReRegister();
-            })
+            .OnAfterUpdateFastCallback(_ => ShellExtensionRegistrar.Register())
             .OnBeforeUninstallFastCallback(_ =>
             {
                 ShellExtensionRegistrar.Unregister();
@@ -292,6 +288,16 @@ public partial class App : Application
         if (lastVersion is not null && lastVersion != currentVersion)
         {
             _trayIcon?.ShowNotification("Claude Assistant", $"Обновлено до v{currentVersion}");
+
+            // Перерегистрируем sparse-пакет верхнего меню именно ЗДЕСЬ — на обычном
+            // старте после обновления, а не в апдейт-хуке Velopack. В хуке
+            // Add-AppxPackage не доходит до конца (короткоживущий контекст, а
+            // AppContext.BaseDirectory там указывает на промежуточную папку апдейта,
+            // не на финальный current) — эмпирически меню всё равно слетало. Обычный
+            // старт идёт в нормальной пользовательской сессии из current — ровно тот
+            // контекст, где ручной per-user Add-AppxPackage работает. В фоне, чтобы
+            // не блокировать запуск (команда занимает пару секунд).
+            _ = Task.Run(MsixSparsePackageRegistrar.ReRegister);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(versionFilePath)!);
