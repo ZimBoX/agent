@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:ClaudeAssistant.Client"
+    xmlns:services="using:ClaudeAssistant.Client.Services"
     xmlns:controls="using:CommunityToolkit.WinUI.UI.Controls">
 
     <Grid x:Name="RootGrid" Background="White" RequestedTheme="Light">
@@ -141,9 +142,12 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Grid Grid.Column="0" Background="{StaticResource AppCardBackgroundBrush}" Padding="20" RowSpacing="12">
+            <Grid Grid.Column="0" Background="{StaticResource AppCardBackgroundBrush}" Padding="20" RowSpacing="10">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
@@ -168,9 +172,26 @@
                     </Button>
                 </Grid>
 
-                <TextBlock Grid.Row="1" Text="История" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
+                <!-- Секция чата -->
+                <Button Grid.Row="1" x:Name="ChatNewButton" Content="+ Новый чат" Click="OnNewChatClick"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
+                        CornerRadius="10" Padding="0,8" BorderThickness="0" />
+                <ListView Grid.Row="3" x:Name="ChatConversationsList" SelectionChanged="OnChatConversationSelectionChanged"
+                          Background="Transparent" BorderThickness="0" Padding="0">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="services:ChatConversationInfo">
+                            <TextBlock Text="{x:Bind Title}" FontSize="13" Margin="0,6"
+                                       Foreground="{StaticResource AppTextPrimaryBrush}"
+                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
 
-                <ListView Grid.Row="2" x:Name="HistoryList" SelectionChanged="OnHistorySelectionChanged"
+                <!-- Секция истории запросов -->
+                <TextBlock Grid.Row="4" Text="История" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
+
+                <ListView Grid.Row="5" x:Name="HistoryList" SelectionChanged="OnHistorySelectionChanged"
                           Background="Transparent" BorderThickness="0" Padding="0">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="local:HistoryListItem">
@@ -183,7 +204,7 @@
                     </ListView.ItemTemplate>
                 </ListView>
 
-                <Button Grid.Row="3" x:Name="LogoutButtonExpanded" Click="OnLogoutClick" HorizontalAlignment="Left"
+                <Button Grid.Row="6" x:Name="LogoutButtonExpanded" Click="OnLogoutClick" HorizontalAlignment="Left"
                         Background="Transparent" BorderThickness="0" Padding="6" CornerRadius="8">
                     <Grid Width="18" Height="18">
                         <Ellipse Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="1.4" Width="14" Height="14" HorizontalAlignment="Left" VerticalAlignment="Center" />
@@ -199,7 +220,7 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                <StackPanel Grid.Row="0" x:Name="ResultActionsPanel" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
                     <Button x:Name="CopyButton" Content="Копировать" Click="OnCopyClick"
                             Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
                             BorderThickness="1" CornerRadius="10" />
@@ -273,6 +294,21 @@
                     <TextBlock x:Name="FollowUpHint" Visibility="Collapsed" FontSize="12"
                                Foreground="{StaticResource AppTextSecondaryBrush}" TextWrapping="Wrap" />
                 </StackPanel>
+
+                <!-- Поле ввода в режиме чата (скрыто в режиме истории; см. EnterChatMode/EnterHistoryMode) -->
+                <Grid Grid.Row="2" x:Name="ChatInputPanel" ColumnSpacing="8" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ChatInputBox" Grid.Column="0" PlaceholderText="Сообщение… (Enter — отправить)"
+                             AcceptsReturn="False" TextWrapping="Wrap" KeyDown="OnChatInputKeyDown"
+                             Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
+                             BorderThickness="1" CornerRadius="10" />
+                    <Button x:Name="ChatSendButton" Grid.Column="1" Click="OnChatSendClick"
+                            Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
+                            CornerRadius="10" Padding="16,0" Content="Отправить" />
+                </Grid>
             </Grid>
         </Grid>
     </Grid>

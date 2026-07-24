@@ -119,6 +119,17 @@ public partial class MainWindow : Window
     private Guid? _conversationId;
     private string _lastAnswerText = string.Empty;
 
+    // Расширенный вид совмещает историю запросов и чат в одном окне. _mode решает,
+    // что показывать справа (результат истории + Копировать/Сохранить, либо чат с
+    // полем ввода). См. EnterHistoryMode/EnterChatMode.
+    private enum ExpandedMode { History, Chat }
+    private ExpandedMode _mode = ExpandedMode.History;
+    private readonly ObservableCollection<ChatConversationInfo> _chatConversations = [];
+    private Guid? _chatConversationId;
+    private bool _chatSending;
+    private bool _suppressChatSelection;
+    private bool _suppressHistorySelection;
+
     // Папка, с которой запустили/дозапустили клиент через ПКМ в Проводнике —
     // если задана, побеждает над папкой прикреплённого файла (см. GetCurrentObjectRoot).
     private string? _launchedFolderPath;
@@ -128,9 +139,6 @@ public partial class MainWindow : Window
     // это событие точно так же, как на RealtimeService.TokenRevoked, и
     // переиспользует тот же переход на экран привязки.
     public event Action? LogoutRequested;
-
-    // Клик по кнопке чата в шапке — App открывает отдельное окно ChatWindow.
-    public event Action? ChatRequested;
 
     public MainWindow()
     {
@@ -166,6 +174,7 @@ public partial class MainWindow : Window
 
         FilesList.ItemsSource = _filePaths;
         ThreadList.ItemsSource = _thread;
+        ChatConversationsList.ItemsSource = _chatConversations;
 
         // Файлы и (максимум одна) папка, переданные при запуске — например, из shell
         // extension через ПКМ в Explorer. Папка — не файл, прикрепить её как документ
@@ -479,6 +488,7 @@ public partial class MainWindow : Window
         // истории оставался пустым до следующего клика по иконке истории.
         _historyCache = null;
         await ExpandAsync();
+        EnterHistoryMode();
         await LoadHistoryAsync();
     }
 
@@ -661,11 +671,176 @@ public partial class MainWindow : Window
         StatusText.Text = "Сохранено";
     }
 
-    private void OnChatClick(object sender, RoutedEventArgs e) => ChatRequested?.Invoke();
+    // Кнопка-облачко в шапке — раскрывает окно и переводит его в режим чата.
+    private async void OnChatClick(object sender, RoutedEventArgs e)
+    {
+        await ExpandAsync();
+        EnterChatMode();
+        StartNewChat();
+        await LoadChatConversationsAsync();
+    }
+
+    private void OnNewChatClick(object sender, RoutedEventArgs e)
+    {
+        EnterChatMode();
+        StartNewChat();
+    }
+
+    // Переключение правой панели в режим чата (поле ввода вместо
+    // Копировать/Сохранить и follow-up истории).
+    private void EnterChatMode()
+    {
+        _mode = ExpandedMode.Chat;
+        ResultActionsPanel.Visibility = Visibility.Collapsed;
+        FollowUpPanel.Visibility = Visibility.Collapsed;
+        FollowUpHint.Visibility = Visibility.Collapsed;
+        ChatInputPanel.Visibility = Visibility.Visible;
+        _suppressHistorySelection = true;
+        HistoryList.SelectedItem = null;
+        _suppressHistorySelection = false;
+    }
+
+    private void EnterHistoryMode()
+    {
+        _mode = ExpandedMode.History;
+        ChatInputPanel.Visibility = Visibility.Collapsed;
+        ResultActionsPanel.Visibility = Visibility.Visible;
+        _suppressChatSelection = true;
+        ChatConversationsList.SelectedItem = null;
+        _suppressChatSelection = false;
+        // FollowUpPanel/FollowUpHint управляются SetFollowUpAvailable.
+    }
+
+    private void StartNewChat()
+    {
+        _chatConversationId = null;
+        _pending = null;
+        _thread.Clear();
+        _suppressChatSelection = true;
+        ChatConversationsList.SelectedItem = null;
+        _suppressChatSelection = false;
+        ChatInputBox.Focus(FocusState.Programmatic);
+    }
+
+    private async Task LoadChatConversationsAsync()
+    {
+        var list = await _backendClient.GetChatConversationsAsync();
+        if (list is null)
+        {
+            return;
+        }
+        var selected = _chatConversationId;
+        _suppressChatSelection = true;
+        _chatConversations.Clear();
+        foreach (var c in list)
+        {
+            _chatConversations.Add(c);
+        }
+        if (selected is { } id)
+        {
+            var match = _chatConversations.FirstOrDefault(c => c.Id == id);
+            if (match is not null)
+            {
+                ChatConversationsList.SelectedItem = match;
+            }
+        }
+        _suppressChatSelection = false;
+    }
+
+    private async void OnChatConversationSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressChatSelection || _chatSending)
+        {
+            return;
+        }
+        if (ChatConversationsList.SelectedItem is ChatConversationInfo conversation)
+        {
+            EnterChatMode();
+            _chatConversationId = conversation.Id;
+            _pending = null;
+            _thread.Clear();
+            var messages = await _backendClient.GetChatMessagesAsync(conversation.Id);
+            if (messages is not null)
+            {
+                foreach (var m in messages)
+                {
+                    _thread.Add(new ChatMessage(isUser: m.IsUser, m.Text));
+                }
+                ScrollThreadToBottom();
+            }
+        }
+    }
+
+    private void OnChatInputKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter && !_chatSending)
+        {
+            e.Handled = true;
+            _ = SendChatAsync();
+        }
+    }
+
+    private void OnChatSendClick(object sender, RoutedEventArgs e) => _ = SendChatAsync();
+
+    private async Task SendChatAsync()
+    {
+        var text = ChatInputBox.Text?.Trim();
+        if (string.IsNullOrEmpty(text) || _chatSending)
+        {
+            return;
+        }
+
+        _chatSending = true;
+        ChatSendButton.IsEnabled = false;
+        ChatInputBox.Text = string.Empty;
+
+        _thread.Add(new ChatMessage(isUser: true, text));
+        // Пузырь стриминга — токены дописываются в OnChatToken.
+        _pending = new ChatMessage(isUser: false, string.Empty, isPending: true);
+        _thread.Add(_pending);
+        ScrollThreadToBottom();
+
+        var result = await _backendClient.SendChatAsync(_chatConversationId, text);
+
+        RemovePendingBubble();
+
+        if (!result.Success)
+        {
+            _thread.Add(new ChatMessage(isUser: false, $"⚠️ Ошибка: {result.ErrorMessage}"));
+            ScrollThreadToBottom();
+        }
+        else
+        {
+            // Финальный текст — авторитетный (на случай потери части стрим-токенов).
+            _thread.Add(new ChatMessage(isUser: false, result.Reply ?? string.Empty));
+            ScrollThreadToBottom();
+            var isNew = _chatConversationId is null;
+            _chatConversationId = result.ConversationId;
+            if (isNew)
+            {
+                await LoadChatConversationsAsync();
+            }
+        }
+
+        _chatSending = false;
+        ChatSendButton.IsEnabled = true;
+        ChatInputBox.Focus(FocusState.Programmatic);
+    }
+
+    // Живые токены ответа чата (SignalR). App маршалит вызов на UI-поток.
+    public void OnChatToken(Guid conversationId, string token)
+    {
+        if (_mode == ExpandedMode.Chat && _pending is not null)
+        {
+            _pending.Text += token;
+            ScrollThreadToBottom();
+        }
+    }
 
     private async void OnHistoryClick(object sender, RoutedEventArgs e)
     {
         await ExpandAsync();
+        EnterHistoryMode();
         await LoadHistoryAsync();
     }
 
@@ -711,10 +886,16 @@ public partial class MainWindow : Window
 
     private void OnHistorySelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressHistorySelection)
+        {
+            return;
+        }
         if (HistoryList.SelectedItem is not HistoryListItem item)
         {
             return;
         }
+
+        EnterHistoryMode();
 
         // Запись из истории продолжить нельзя (диалог живёт только в памяти сервера
         // в пределах окна кэша) — показываем как одиночный ответ без поля follow-up.
