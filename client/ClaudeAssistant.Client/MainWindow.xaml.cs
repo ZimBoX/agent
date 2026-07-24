@@ -129,6 +129,9 @@ public partial class MainWindow : Window
     private bool _chatSending;
     private bool _suppressChatSelection;
     private bool _suppressHistorySelection;
+    // Файлы, прикреплённые к текущему сообщению чата / follow-up (до отправки).
+    private readonly List<string> _chatAttachments = [];
+    private readonly List<string> _followUpAttachments = [];
 
     // Папка, с которой запустили/дозапустили клиент через ПКМ в Проводнике —
     // если задана, побеждает над папкой прикреплённого файла (см. GetCurrentObjectRoot).
@@ -426,6 +429,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Проверяем размеры до отправки — иначе при превышении лимита сервер рвёт
+        // соединение и вместо понятного сообщения видна «ошибка потока».
+        var fileError = FileLimits.Validate(selectedPaths);
+        if (fileError is not null)
+        {
+            StatusText.Text = fileError;
+            return;
+        }
+
         Guid? templateId;
         string? customPrompt;
         if (template.Id == Guid.Empty)
@@ -535,6 +547,8 @@ public partial class MainWindow : Window
         _thread.Clear();
         _pending = null;
         _lastAnswerText = answer;
+        _followUpAttachments.Clear();
+        UpdateAttachmentsText(FollowUpAttachmentsText, _followUpAttachments);
         _thread.Add(new ChatMessage(isUser: false, answer));
         _conversationId = conversationId;
         SetFollowUpAvailable(conversationId is not null, hint: null);
@@ -572,14 +586,18 @@ public partial class MainWindow : Window
 
     private async void OnFollowUpSendClick(object sender, RoutedEventArgs e)
     {
-        var text = FollowUpBox.Text?.Trim();
-        if (string.IsNullOrEmpty(text) || _conversationId is not { } conversationId)
+        var text = FollowUpBox.Text?.Trim() ?? string.Empty;
+        if ((text.Length == 0 && _followUpAttachments.Count == 0) || _conversationId is not { } conversationId)
         {
             return;
         }
 
-        _thread.Add(new ChatMessage(isUser: true, text));
+        var attachments = _followUpAttachments.ToList();
+
+        _thread.Add(new ChatMessage(isUser: true, BuildUserBubble(text, attachments)));
         FollowUpBox.Text = string.Empty;
+        _followUpAttachments.Clear();
+        UpdateAttachmentsText(FollowUpAttachmentsText, _followUpAttachments);
         // Пузырь "печатает…" в треде — чтобы было видно, что идёт обработка (нижняя
         // строка статуса в расширенном виде не видна).
         AddPendingBubble();
@@ -594,7 +612,7 @@ public partial class MainWindow : Window
         ContinueResult result;
         try
         {
-            result = await _backendClient.ContinueAsync(conversationId, text);
+            result = await _backendClient.ContinueAsync(conversationId, text, attachments);
         }
         finally
         {
@@ -719,6 +737,8 @@ public partial class MainWindow : Window
         _chatConversationId = null;
         _pending = null;
         _thread.Clear();
+        _chatAttachments.Clear();
+        UpdateAttachmentsText(ChatAttachmentsText, _chatAttachments);
         _suppressChatSelection = true;
         ChatConversationsList.SelectedItem = null;
         _suppressChatSelection = false;
@@ -739,7 +759,9 @@ public partial class MainWindow : Window
         {
             _chatConversations.Add(c);
         }
-        if (selected is { } id)
+        // Подсвечиваем текущий диалог только когда реально в режиме чата — иначе
+        // при показе результата истории список чатов визуально «выбирал» диалог.
+        if (_mode == ExpandedMode.Chat && selected is { } id)
         {
             var match = _chatConversations.FirstOrDefault(c => c.Id == id);
             if (match is not null)
@@ -762,6 +784,8 @@ public partial class MainWindow : Window
             _chatConversationId = conversation.Id;
             _pending = null;
             _thread.Clear();
+            _chatAttachments.Clear();
+            UpdateAttachmentsText(ChatAttachmentsText, _chatAttachments);
             var messages = await _backendClient.GetChatMessagesAsync(conversation.Id);
             if (messages is not null)
             {
@@ -787,23 +811,27 @@ public partial class MainWindow : Window
 
     private async Task SendChatAsync()
     {
-        var text = ChatInputBox.Text?.Trim();
-        if (string.IsNullOrEmpty(text) || _chatSending)
+        var text = ChatInputBox.Text?.Trim() ?? string.Empty;
+        if ((text.Length == 0 && _chatAttachments.Count == 0) || _chatSending)
         {
             return;
         }
 
+        var attachments = _chatAttachments.ToList();
+
         _chatSending = true;
         ChatSendButton.IsEnabled = false;
         ChatInputBox.Text = string.Empty;
+        _chatAttachments.Clear();
+        UpdateAttachmentsText(ChatAttachmentsText, _chatAttachments);
 
-        _thread.Add(new ChatMessage(isUser: true, text));
+        _thread.Add(new ChatMessage(isUser: true, BuildUserBubble(text, attachments)));
         // Пузырь стриминга — токены дописываются в OnChatToken.
         _pending = new ChatMessage(isUser: false, string.Empty, isPending: true);
         _thread.Add(_pending);
         ScrollThreadToBottom();
 
-        var result = await _backendClient.SendChatAsync(_chatConversationId, text);
+        var result = await _backendClient.SendChatAsync(_chatConversationId, text, attachments);
 
         RemovePendingBubble();
 
@@ -838,6 +866,91 @@ public partial class MainWindow : Window
             _pending.Text += token;
             ScrollThreadToBottom();
         }
+    }
+
+    // ===== Прикрепление файлов (чат и follow-up) =====
+
+    private async Task<List<string>> PickFilesAsync()
+    {
+        var picker = new FileOpenPicker();
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        picker.FileTypeFilter.Add(".docx");
+        picker.FileTypeFilter.Add(".xlsx");
+        picker.FileTypeFilter.Add(".pdf");
+        var files = await picker.PickMultipleFilesAsync();
+        return files.Select(f => f.Path).ToList();
+    }
+
+    private async void OnChatAttachClick(object sender, RoutedEventArgs e)
+    {
+        var picked = await PickFilesAsync();
+        if (picked.Count == 0)
+        {
+            return;
+        }
+        var combined = _chatAttachments.Concat(picked).ToList();
+        var error = FileLimits.Validate(combined);
+        if (error is not null)
+        {
+            _thread.Add(new ChatMessage(isUser: false, $"⚠️ {error}"));
+            ScrollThreadToBottom();
+            return;
+        }
+        _chatAttachments.Clear();
+        _chatAttachments.AddRange(combined);
+        UpdateAttachmentsText(ChatAttachmentsText, _chatAttachments);
+    }
+
+    private void OnClearChatAttachments(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        _chatAttachments.Clear();
+        UpdateAttachmentsText(ChatAttachmentsText, _chatAttachments);
+    }
+
+    private async void OnFollowUpAttachClick(object sender, RoutedEventArgs e)
+    {
+        var picked = await PickFilesAsync();
+        if (picked.Count == 0)
+        {
+            return;
+        }
+        var combined = _followUpAttachments.Concat(picked).ToList();
+        var error = FileLimits.Validate(combined);
+        if (error is not null)
+        {
+            StatusText.Text = error;
+            return;
+        }
+        _followUpAttachments.Clear();
+        _followUpAttachments.AddRange(combined);
+        UpdateAttachmentsText(FollowUpAttachmentsText, _followUpAttachments);
+    }
+
+    private void OnClearFollowUpAttachments(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+    {
+        _followUpAttachments.Clear();
+        UpdateAttachmentsText(FollowUpAttachmentsText, _followUpAttachments);
+    }
+
+    private static void UpdateAttachmentsText(TextBlock target, List<string> paths)
+    {
+        if (paths.Count == 0)
+        {
+            target.Visibility = Visibility.Collapsed;
+            return;
+        }
+        target.Text = "📎 " + string.Join(", ", paths.Select(Path.GetFileName)) + "  · нажмите, чтобы убрать";
+        target.Visibility = Visibility.Visible;
+    }
+
+    private static string BuildUserBubble(string text, List<string> attachments)
+    {
+        if (attachments.Count == 0)
+        {
+            return text;
+        }
+        var note = "📎 " + string.Join(", ", attachments.Select(Path.GetFileName));
+        return text.Length == 0 ? note : $"{text}\n{note}";
     }
 
     private async void OnHistoryClick(object sender, RoutedEventArgs e)

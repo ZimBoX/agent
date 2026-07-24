@@ -42,13 +42,26 @@ public class ChatService(
         Guid userId,
         Guid? conversationId,
         string text,
+        string? combinedFileText,
+        IReadOnlyList<byte[]>? images,
+        string? fileNames,
         CancellationToken cancellationToken
     )
     {
-        var conversation = await LoadOrCreateAsync(userId, conversationId, text, cancellationToken);
+        // Что видит модель — текст пользователя + извлечённый текст файлов; сканы
+        // уходят изображениями. Что хранится/показывается в пузыре — текст +
+        // компактная пометка о приложенных файлах (без сырого текста файлов).
+        var modelText = string.IsNullOrEmpty(combinedFileText)
+            ? text
+            : string.IsNullOrEmpty(text) ? combinedFileText : $"{text}\n\n{combinedFileText}";
+        var displayText = string.IsNullOrEmpty(fileNames)
+            ? text
+            : string.IsNullOrEmpty(text) ? $"📎 {fileNames}" : $"{text}\n\n📎 {fileNames}";
+
+        var conversation = await LoadOrCreateAsync(userId, conversationId, displayText, cancellationToken);
 
         // Собираем историю в формат SDK ДО добавления нового сообщения в БД, затем
-        // дописываем текущую реплику пользователя.
+        // дописываем текущую реплику пользователя (с файлами, если приложены).
         var messages = conversation.Messages
             .OrderBy(m => m.CreatedAt)
             .Select(m => new MessageParam
@@ -60,14 +73,14 @@ public class ChatService(
         messages.Add(new MessageParam
         {
             Role = Anthropic.Models.Messages.Role.User,
-            Content = new List<ContentBlockParam> { new TextBlockParam { Text = text } },
+            Content = BuildUserContent(modelText, images),
         });
 
         db.ChatMessages.Add(new ChatMessage
         {
             ConversationId = conversation.Id,
             IsUser = true,
-            Text = text,
+            Text = displayText,
             CreatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync(cancellationToken);
@@ -195,6 +208,21 @@ public class ChatService(
 
         var text = sb.ToString();
         return string.IsNullOrWhiteSpace(text) ? "(пустой ответ)" : text;
+    }
+
+    private static List<ContentBlockParam> BuildUserContent(string text, IReadOnlyList<byte[]>? images)
+    {
+        var parts = new List<ContentBlockParam> { new TextBlockParam { Text = text } };
+        if (images is not null)
+        {
+            parts.AddRange(
+                images.Select(img => (ContentBlockParam)new ImageBlockParam
+                {
+                    Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(img) },
+                })
+            );
+        }
+        return parts;
     }
 
     private static string ExtractText(Message response)

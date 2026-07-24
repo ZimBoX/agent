@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ClaudeAssistant.Api.Dtos;
 using ClaudeAssistant.Api.Services;
+using ClaudeAssistant.Api.Services.FileTextExtraction;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -9,22 +10,54 @@ namespace ClaudeAssistant.Api.Controllers;
 [ApiController]
 [Route("api/chat")]
 [Authorize]
-public class ChatController(ChatService chatService) : ControllerBase
+public class ChatController(ChatService chatService, MultiFileExtractionService extractionService) : ControllerBase
 {
     private Guid UserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-    // Отправить сообщение в чат. Ответ стримится по токенам в SignalR
-    // (ChatToken), а тут возвращается целиком по завершении — авторитетный текст
-    // + conversationId/title для привязки нового диалога на клиенте.
+    // Отправить сообщение в чат (мультипарт — можно приложить файлы). Ответ
+    // стримится по токенам в SignalR (ChatToken), а тут возвращается целиком по
+    // завершении — авторитетный текст + conversationId/title.
     [HttpPost("send")]
-    public async Task<ActionResult<ChatSendResponse>> Send([FromBody] ChatSendRequest request, CancellationToken cancellationToken)
+    [RequestSizeLimit(FileUploadLimits.MaxTotalSizeBytes)]
+    public async Task<ActionResult<ChatSendResponse>> Send(
+        [FromForm] Guid? conversationId,
+        [FromForm] string? text,
+        List<IFormFile> files,
+        CancellationToken cancellationToken
+    )
     {
-        if (string.IsNullOrWhiteSpace(request.Text))
+        if (string.IsNullOrWhiteSpace(text) && files.Count == 0)
         {
             return BadRequest(new { error = "Пустое сообщение" });
         }
 
-        var response = await chatService.SendAsync(UserId, request.ConversationId, request.Text.Trim(), cancellationToken);
+        string? combinedFileText = null;
+        IReadOnlyList<byte[]> images = [];
+        string? fileNames = null;
+        if (files.Count > 0)
+        {
+            try
+            {
+                var extraction = await extractionService.ExtractAndCombineAsync(files);
+                combinedFileText = extraction.CombinedText;
+                images = extraction.Images;
+                fileNames = string.Join(", ", files.Select(f => f.FileName));
+            }
+            catch (FileValidationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+        }
+
+        var response = await chatService.SendAsync(
+            UserId,
+            conversationId,
+            (text ?? string.Empty).Trim(),
+            combinedFileText,
+            images,
+            fileNames,
+            cancellationToken
+        );
         return Ok(response);
     }
 

@@ -148,6 +148,8 @@ public class ChatCompletionService(
         Guid conversationId,
         string followupText,
         Guid userId,
+        IReadOnlyList<byte[]>? images = null,
+        string? combinedFileText = null,
         IProgress<string>? status = null,
         CancellationToken cancellationToken = default
     )
@@ -160,8 +162,11 @@ public class ChatCompletionService(
             throw new ConversationNotFoundException();
         }
 
+        // Прикреплённые к follow-up файлы: их извлечённый текст дописываем к вопросу,
+        // сканы (без текстового слоя) уходят изображениями (см. BuildUserContentNative).
+        var userText = string.IsNullOrEmpty(combinedFileText) ? followupText : $"{followupText}\n\n{combinedFileText}";
         state.Messages.Add(
-            new MessageParam { Role = Role.User, Content = new List<ContentBlockParam> { new TextBlockParam { Text = followupText } } }
+            new MessageParam { Role = Role.User, Content = BuildUserContentNative(userText, images) }
         );
 
         var result = await RunTurnNative(state.Model, state.SystemBlocks, state.Messages, state.SandboxRoot, userId, status, cancellationToken);

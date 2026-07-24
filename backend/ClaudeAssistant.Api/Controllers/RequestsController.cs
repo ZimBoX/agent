@@ -274,22 +274,44 @@ public class RequestsController(
     // если исходный запрос был поиском по папке), возвращает ответ. 410 — диалог
     // истёк/не найден: продолжать нельзя, контекст выпал из кэша.
     [HttpPost("{conversationId:guid}/continue")]
-    public async Task<ActionResult<ContinueResponse>> Continue(Guid conversationId, [FromBody] ContinueRequest request)
+    [RequestSizeLimit(FileUploadLimits.MaxTotalSizeBytes)]
+    public async Task<ActionResult<ContinueResponse>> Continue(Guid conversationId, [FromForm] string? message, List<IFormFile> files)
     {
-        if (string.IsNullOrWhiteSpace(request.Message))
+        if (string.IsNullOrWhiteSpace(message) && files.Count == 0)
         {
             return BadRequest(new ErrorResponse("Пустое сообщение"));
         }
 
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+        // Файлы, прикреплённые к follow-up: извлекаем текст/изображения так же, как в execute.
+        string? combinedFileText = null;
+        IReadOnlyList<byte[]> images = [];
+        if (files.Count > 0)
+        {
+            try
+            {
+                var extraction = await extractionService.ExtractAndCombineAsync(files);
+                combinedFileText = extraction.CombinedText;
+                images = extraction.Images;
+            }
+            catch (FileValidationException ex)
+            {
+                return BadRequest(new ErrorResponse(ex.Message));
+            }
+        }
+
+        var displayMessage = string.IsNullOrWhiteSpace(message) ? "(файлы)" : message!;
+
         try
         {
             var result = await chatCompletionService.ContinueConversationAsync(
                 conversationId,
-                request.Message,
+                message ?? string.Empty,
                 userId,
-                BuildStatusReporter(userId)
+                images: images,
+                combinedFileText: combinedFileText,
+                status: BuildStatusReporter(userId)
             );
             var accessedFiles = result.AccessedFiles.Count > 0 ? string.Join(", ", result.AccessedFiles) : null;
 
@@ -304,7 +326,7 @@ public class RequestsController(
                 {
                     entry.ResultText =
                         (entry.ResultText ?? "")
-                        + $"\n\n---\n\n**Вопрос:** {request.Message}\n\n{result.ResultText}";
+                        + $"\n\n---\n\n**Вопрос:** {displayMessage}\n\n{result.ResultText}";
                     if (accessedFiles is not null)
                     {
                         entry.AccessedFiles = string.IsNullOrEmpty(entry.AccessedFiles)

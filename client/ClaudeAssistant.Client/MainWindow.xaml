@@ -278,16 +278,24 @@
                 <!-- Поле продолжения диалога. Видно, пока сессия активна (есть
                      conversationId и не истекла) — см. MainWindow.SetFollowUpAvailable. -->
                 <StackPanel Grid.Row="2" Spacing="6">
+                    <TextBlock x:Name="FollowUpAttachmentsText" Visibility="Collapsed" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource AppTextSecondaryBrush}" Tapped="OnClearFollowUpAttachments"
+                               ToolTipService.ToolTip="Нажмите, чтобы убрать прикреплённые файлы" />
                     <Grid x:Name="FollowUpPanel" ColumnSpacing="8" Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="FollowUpBox" Grid.Column="0" PlaceholderText="Продолжить диалог... (Enter — отправить)"
+                        <Button x:Name="FollowUpAttachButton" Grid.Column="0" Click="OnFollowUpAttachClick" Content="📎"
+                                ToolTipService.ToolTip="Прикрепить файлы (.docx, .xlsx, .pdf)"
+                                Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="10,0" />
+                        <TextBox x:Name="FollowUpBox" Grid.Column="1" PlaceholderText="Продолжить диалог... (Enter — отправить)"
                                  AcceptsReturn="False" TextWrapping="Wrap" KeyDown="OnFollowUpKeyDown"
                                  Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
                                  BorderThickness="1" CornerRadius="10" />
-                        <Button x:Name="FollowUpSend" Grid.Column="1" Click="OnFollowUpSendClick"
+                        <Button x:Name="FollowUpSend" Grid.Column="2" Click="OnFollowUpSendClick"
                                 Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
                                 CornerRadius="10" Padding="16,0" Content="Отправить" />
                     </Grid>
@@ -296,19 +304,29 @@
                 </StackPanel>
 
                 <!-- Поле ввода в режиме чата (скрыто в режиме истории; см. EnterChatMode/EnterHistoryMode) -->
-                <Grid Grid.Row="2" x:Name="ChatInputPanel" ColumnSpacing="8" Visibility="Collapsed">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="ChatInputBox" Grid.Column="0" PlaceholderText="Сообщение… (Enter — отправить)"
-                             AcceptsReturn="False" TextWrapping="Wrap" KeyDown="OnChatInputKeyDown"
-                             Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
-                             BorderThickness="1" CornerRadius="10" />
-                    <Button x:Name="ChatSendButton" Grid.Column="1" Click="OnChatSendClick"
-                            Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
-                            CornerRadius="10" Padding="16,0" Content="Отправить" />
-                </Grid>
+                <StackPanel Grid.Row="2" x:Name="ChatInputPanel" Spacing="6" Visibility="Collapsed">
+                    <TextBlock x:Name="ChatAttachmentsText" Visibility="Collapsed" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource AppTextSecondaryBrush}" Tapped="OnClearChatAttachments"
+                               ToolTipService.ToolTip="Нажмите, чтобы убрать прикреплённые файлы" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="ChatAttachButton" Grid.Column="0" Click="OnChatAttachClick" Content="📎"
+                                ToolTipService.ToolTip="Прикрепить файлы (.docx, .xlsx, .pdf)"
+                                Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
+                                BorderThickness="1" CornerRadius="10" Padding="10,0" />
+                        <TextBox x:Name="ChatInputBox" Grid.Column="1" PlaceholderText="Сообщение… (Enter — отправить)"
+                                 AcceptsReturn="False" TextWrapping="Wrap" KeyDown="OnChatInputKeyDown"
+                                 Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
+                                 BorderThickness="1" CornerRadius="10" />
+                        <Button x:Name="ChatSendButton" Grid.Column="2" Click="OnChatSendClick"
+                                Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
+                                CornerRadius="10" Padding="16,0" Content="Отправить" />
+                    </Grid>
+                </StackPanel>
             </Grid>
         </Grid>
     </Grid>

@@ -185,13 +185,22 @@ public class BackendClient
 
     // Продолжает диалог по conversationId (получен из ExecuteAsync). В пределах
     // окна кэша (1 час) — иначе backend отвечает 410 и Expired=true.
-    public async Task<ContinueResult> ContinueAsync(Guid conversationId, string message)
+    public async Task<ContinueResult> ContinueAsync(Guid conversationId, string message, IReadOnlyList<string> filePaths)
     {
         AttachAuth();
 
+        using var content = new MultipartFormDataContent { { new StringContent(message), "message" } };
+        var fileStreams = new List<FileStream>();
         try
         {
-            var response = await _http.PostAsJsonAsync($"/api/requests/{conversationId}/continue", new { message });
+            foreach (var path in filePaths)
+            {
+                var stream = File.OpenRead(path);
+                fileStreams.Add(stream);
+                content.Add(new StreamContent(stream), "files", Path.GetFileName(path));
+            }
+
+            var response = await _http.PostAsync($"/api/requests/{conversationId}/continue", content);
             if (response.StatusCode == System.Net.HttpStatusCode.Gone)
             {
                 return new ContinueResult(false, null, "Сессия истекла — начните новый запрос", Expired: true);
@@ -212,6 +221,13 @@ public class BackendClient
         catch (TaskCanceledException)
         {
             return new ContinueResult(false, null, "Сервер долго не отвечает — попробуйте повторить запрос чуть позже.");
+        }
+        finally
+        {
+            foreach (var stream in fileStreams)
+            {
+                await stream.DisposeAsync();
+            }
         }
     }
 
@@ -241,12 +257,27 @@ public class BackendClient
 
     // Ответ приходит целиком по завершении (авторитетный текст); токены по мере
     // генерации — отдельно по SignalR (RealtimeService.ChatToken).
-    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text)
+    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text, IReadOnlyList<string> filePaths)
     {
+        AttachAuth();
+
+        using var content = new MultipartFormDataContent { { new StringContent(text), "text" } };
+        if (conversationId is { } id)
+        {
+            content.Add(new StringContent(id.ToString()), "conversationId");
+        }
+
+        var fileStreams = new List<FileStream>();
         try
         {
-            AttachAuth();
-            var response = await _http.PostAsJsonAsync("/api/chat/send", new { conversationId, text });
+            foreach (var path in filePaths)
+            {
+                var stream = File.OpenRead(path);
+                fileStreams.Add(stream);
+                content.Add(new StreamContent(stream), "files", Path.GetFileName(path));
+            }
+
+            var response = await _http.PostAsync("/api/chat/send", content);
             if (!response.IsSuccessStatusCode)
             {
                 var errorText = await response.Content.ReadAsStringAsync();
@@ -262,6 +293,13 @@ public class BackendClient
         catch (TaskCanceledException)
         {
             return new ChatSendResult(false, Guid.Empty, null, null, "Сервер долго не отвечает — попробуйте повторить чуть позже.");
+        }
+        finally
+        {
+            foreach (var stream in fileStreams)
+            {
+                await stream.DisposeAsync();
+            }
         }
     }
 
