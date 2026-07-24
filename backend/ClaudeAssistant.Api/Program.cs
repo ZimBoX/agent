@@ -216,6 +216,93 @@ app.MapPost(
     }
 );
 
+// Публичная (без логина) страница со списком релизов и ссылкой на установщик —
+// раздельно по каналам (релиз `win` / бета). Читает releases.<channel>.json из
+// релиз-фида; установщик канала — Install-ClaudeAssistant-<channel>.exe рядом в
+// /releases (если загружен). Пользователи заходят сюда, чтобы скачать клиент.
+app.MapGet(
+    "/downloads",
+    () =>
+    {
+        static List<(string Version, long Size)> ReadFull(string feedPath)
+        {
+            if (!File.Exists(feedPath))
+            {
+                return [];
+            }
+
+            var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(feedPath))!.AsObject();
+            return root["Assets"]!
+                .AsArray()
+                .Where(a => (string?)a!["Type"] == "Full")
+                .Select(a => ((string)a!["Version"]!, (long?)a!["Size"] ?? 0L))
+                .OrderByDescending(x => Version.Parse(x.Item1))
+                .ToList();
+        }
+
+        var sb = new StringBuilder();
+        sb.Append(
+            """
+            <!doctype html><html lang="ru"><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Claude Assistant — загрузки</title><style>
+            :root{color-scheme:light dark}
+            body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:760px;margin:2.5rem auto;padding:0 1.25rem;line-height:1.5}
+            h1{font-size:1.6rem;margin:0 0 .25rem}
+            .sub{opacity:.65;margin:0 0 2rem}
+            section{border:1px solid color-mix(in srgb,currentColor 15%,transparent);border-radius:14px;padding:1.25rem 1.5rem;margin:0 0 1.25rem}
+            h2{font-size:1.15rem;margin:0 0 .75rem;display:flex;align-items:center;gap:.6rem}
+            .badge{font-size:.72rem;font-weight:600;padding:.15rem .5rem;border-radius:999px;background:color-mix(in srgb,currentColor 12%,transparent)}
+            .btn{display:inline-block;background:#2563eb;color:#fff;text-decoration:none;padding:.6rem 1.1rem;border-radius:10px;font-weight:600;margin:.25rem 0 1rem}
+            .btn:hover{background:#1d4ed8}
+            .empty{opacity:.6;font-style:italic}
+            table{width:100%;border-collapse:collapse;font-size:.92rem}
+            th,td{text-align:left;padding:.4rem .5rem;border-bottom:1px solid color-mix(in srgb,currentColor 10%,transparent)}
+            th{opacity:.6;font-weight:600}
+            tr:last-child td{border-bottom:none}
+            </style></head><body>
+            <h1>Claude Assistant</h1><p class="sub">Установщик и список версий</p>
+            """
+        );
+
+        foreach (var (ch, title) in new[] { ("win", "Релиз"), ("beta", "Бета") })
+        {
+            var releases = ReadFull(Path.Combine(Program.ReleasesPath, $"releases.{ch}.json"));
+            var installer = $"Install-ClaudeAssistant-{ch}.exe";
+            var installerExists = File.Exists(Path.Combine(Program.ReleasesPath, installer));
+
+            sb.Append($"<section><h2>{title} <span class=\"badge\">{ch}</span></h2>");
+
+            if (releases.Count == 0)
+            {
+                sb.Append("<p class=\"empty\">Пока нет версий в этом канале.</p></section>");
+                continue;
+            }
+
+            if (installerExists)
+            {
+                sb.Append(
+                    $"<a class=\"btn\" href=\"/releases/{installer}\">Скачать установщик · v{releases[0].Version}</a>"
+                );
+            }
+            else
+            {
+                sb.Append("<p class=\"empty\">Установщик для этого канала ещё не загружен.</p>");
+            }
+
+            sb.Append("<table><thead><tr><th>Версия</th><th>Размер</th></tr></thead><tbody>");
+            foreach (var (v, size) in releases)
+            {
+                sb.Append($"<tr><td>{v}</td><td>{size / 1024.0 / 1024.0:0.0} МБ</td></tr>");
+            }
+            sb.Append("</tbody></table></section>");
+        }
+
+        sb.Append("</body></html>");
+        return Results.Content(sb.ToString(), "text/html; charset=utf-8");
+    }
+);
+
 app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
 app.Run();
