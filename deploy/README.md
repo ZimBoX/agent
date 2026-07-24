@@ -94,6 +94,36 @@ cd deploy && docker compose up -d --build
 Затем собрать клиент через **VS MSBuild** (не `dotnet build` — баг с `.pri`, см.
 `ПЕРЕЕЗД.md`) и залить билд через админку `/admin`.
 
+## 6. Сетевые шары — поиск файлов по объекту
+
+Фича «поиск файлов по объекту»: модель сама читает файлы в папке объекта, которую
+клиент прислал UNC-путём (`\\archive-office\arhiv-gsfs\...`). Бэкенд на Linux
+открывает их через смонтированную шару + трансляцию пути (`ProjectFiles:UncMappings`
+в `docker-compose.yml`).
+
+Шара `arhiv-gsfs` файлсервера `archive-office` (192.168.0.21) монтируется на хост
+**read-only** и пробрасывается в контейнер (`/mnt/synology:/mnt/synology:ro`):
+
+```bash
+sudo apt-get install -y cifs-utils
+sudo mkdir -p /mnt/synology/arhiv-gsfs
+sudo tee /root/.synology-credentials >/dev/null <<'CRED'
+username=backend_ro
+password=ПАРОЛЬ-ЧИТАТЕЛЯ
+CRED
+sudo chmod 600 /root/.synology-credentials
+
+# /etc/fstab (по IP — Linux не резолвит NetBIOS-имя archive-office):
+//192.168.0.21/arhiv-gsfs  /mnt/synology/arhiv-gsfs  cifs  credentials=/root/.synology-credentials,ro,uid=0,gid=0,iocharset=utf8,vers=3.0,nofail,x-systemd.automount  0  0
+
+sudo systemctl daemon-reload && sudo mount -a
+ls "/mnt/synology/arhiv-gsfs/ДЛЯ ОБМЕНА"   # проверка: видны файлы, кириллица читается
+```
+
+Клиенты обращаются к шаре и по имени, и по IP — оба префикса заведены в
+`UncMappings`. Если появятся другие файлсерверы/шары — добавить пары
+`ProjectFiles__UncMappings__N__Unc/__Local` и смонтировать их так же.
+
 ## Необязательное усиление
 
 - **DataProtection-ключи** сейчас лежат внутри контейнера

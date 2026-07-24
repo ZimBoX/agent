@@ -4,6 +4,15 @@ namespace ClaudeAssistant.Api.Services.ProjectFiles;
 
 public class PathAccessDeniedException(string requestedPath) : Exception($"Доступ к пути запрещён: {requestedPath}");
 
+// Одно правило трансляции UNC-пути (как его шлёт Windows-клиент) в точку
+// монтирования шары на Linux-хосте бэкенда. Задаётся в конфиге
+// ProjectFiles:UncMappings (см. docker-compose на сервере).
+public sealed record UncMapping
+{
+    public string Unc { get; init; } = "";
+    public string Local { get; init; } = "";
+}
+
 // Единственная точка доступа к файлам "объекта" — папки, которую клиент передаёт
 // как sandbox-корень конкретного запроса (либо папка, содержащая прикреплённый
 // файл, либо папка, по которой кликнули правой кнопкой в Проводнике — выбор
@@ -21,14 +30,56 @@ public class SandboxedFileAccessService(IConfiguration configuration, FileTextEx
     // в Проводнике), без дополнительного сужения.
     private string? ConfiguredRoot => configuration["ProjectFiles:Root"];
 
+    private IReadOnlyList<UncMapping> UncMappings =>
+        configuration.GetSection("ProjectFiles:UncMappings").Get<List<UncMapping>>() ?? [];
+
+    // Клиент (Windows) присылает папку-объект в UNC-форме (\\сервер\шара\...,
+    // см. NetworkPathResolver на клиенте). Бэкенд на Linux такой путь напрямую не
+    // откроет — транслируем известные UNC-префиксы в точки монтирования шары. Если
+    // ни один префикс не подошёл (в т.ч. на Windows-dev, где маппингов нет) — путь
+    // возвращается как есть; там нативный UNC работает сам.
+    private string TranslateUncPath(string path)
+    {
+        foreach (var mapping in UncMappings)
+        {
+            if (string.IsNullOrWhiteSpace(mapping.Unc) || string.IsNullOrWhiteSpace(mapping.Local))
+            {
+                continue;
+            }
+
+            var prefix = mapping.Unc.TrimEnd('\\', '/');
+            var localRoot = mapping.Local.TrimEnd('/');
+
+            if (path.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return localRoot;
+            }
+
+            // Сравнение с завершающим "\" — чтобы префикс "\\host\share" не
+            // проглотил "\\host\share-other".
+            if (path.StartsWith(prefix + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                var rest = path[prefix.Length..].Replace('\\', '/');
+                return localRoot + rest;
+            }
+        }
+
+        return path;
+    }
+
     // Проверяет и канонизирует папку, которую клиент прислал как объект — и,
     // если задан ProjectFiles:Root, что она физически внутри него.
     public string? ValidateRoot(string absolutePath, Guid userId)
     {
+        // Сначала UNC→mount (см. TranslateUncPath) — иначе Path.GetFullPath на Linux
+        // примет "\\host\share\..." за странный относительный путь (обратный слэш там
+        // обычный символ имени, а не разделитель).
+        var translated = TranslateUncPath(absolutePath);
+
         string full;
         try
         {
-            full = Path.GetFullPath(absolutePath);
+            full = Path.GetFullPath(translated);
         }
         catch (Exception)
         {

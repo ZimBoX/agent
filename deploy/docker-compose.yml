@@ -41,6 +41,15 @@ services:
       AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:?AITUNNEL_API_KEY не задан в .env}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD не задан в .env}
+      # Поиск файлов по объекту: граница доступа (папка-объект обязана лежать внутри)
+      # и трансляция UNC-путей клиента в точку монтирования шары archive-office.
+      # Шара arhiv-gsfs (\\archive-office = 192.168.0.21) смонтирована на хосте в
+      # /mnt/synology/arhiv-gsfs и проброшена ниже read-only.
+      ProjectFiles__Root: /mnt/synology/arhiv-gsfs
+      ProjectFiles__UncMappings__0__Unc: "\\\\archive-office\\arhiv-gsfs"
+      ProjectFiles__UncMappings__0__Local: /mnt/synology/arhiv-gsfs
+      ProjectFiles__UncMappings__1__Unc: "\\\\192.168.0.21\\arhiv-gsfs"
+      ProjectFiles__UncMappings__1__Local: /mnt/synology/arhiv-gsfs
     ports:
       - "5149:5149"
     volumes:
@@ -49,6 +58,9 @@ services:
       - releases_data:/app/releases
       # Файловые логи Serilog (LocalApplicationData у root внутри контейнера).
       - backend_logs:/root/.local/share/ClaudeAssistant/backend-logs
+      # Шара с папками объектов (смонтирована на хосте, см. deploy/README раздел 6),
+      # read-only — бэкенд файлы только читает.
+      - /mnt/synology:/mnt/synology:ro
 
 volumes:
   postgres_data:
