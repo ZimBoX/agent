@@ -30,7 +30,10 @@ public static class MsixSparsePackageRegistrar
     {
         try
         {
-            var installDir = AppContext.BaseDirectory;
+            // Без хвостового разделителя — тем же путём регистрирует установщик, и
+            // ExternalLocation должен совпадать при любой перерегистрации (иначе
+            // 0x80073D0B, см. ReRegister).
+            var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var certPath = Path.Combine(installDir, "ShellExtension", "ClaudeAssistant.cer");
             var msixPath = Path.Combine(installDir, "ShellExtension", "ClaudeAssistant.ShellExtension.msix");
 
@@ -97,7 +100,13 @@ public static class MsixSparsePackageRegistrar
     {
         try
         {
-            var installDir = AppContext.BaseDirectory;
+            // ВАЖНО: ExternalLocation обязан ПОБАЙТОВО совпадать с тем, чем пакет уже
+            // зарегистрирован, иначе Add-AppxPackage падает с 0x80073D0B ("уже
+            // установлен с другим внешним расположением"). Установщик
+            // (InstallerLauncher) и ручная команда регистрируют по пути БЕЗ хвостового
+            // разделителя (Path.Combine его не добавляет), а AppContext.BaseDirectory
+            // возвращает путь С хвостовым '\' — срезаем, чтобы совпало.
+            var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var msixPath = Path.Combine(installDir, "ShellExtension", "ClaudeAssistant.ShellExtension.msix");
 
             Log($"ReRegister start: installDir={installDir}; msixExists={File.Exists(msixPath)}; elevated={IsElevated()}");
