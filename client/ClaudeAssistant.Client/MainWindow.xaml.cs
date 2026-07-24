@@ -490,6 +490,7 @@ public partial class MainWindow : Window
         await ExpandAsync();
         EnterHistoryMode();
         await LoadHistoryAsync();
+        await LoadChatConversationsAsync();
     }
 
     // Живой статус обработки, приходящий с backend по SignalR ("Думаю…",
@@ -677,7 +678,9 @@ public partial class MainWindow : Window
         await ExpandAsync();
         EnterChatMode();
         StartNewChat();
+        // Наполняем обе секции сайдбара — история видна и в режиме чата.
         await LoadChatConversationsAsync();
+        await LoadHistoryAsync();
     }
 
     private void OnNewChatClick(object sender, RoutedEventArgs e)
@@ -841,7 +844,9 @@ public partial class MainWindow : Window
     {
         await ExpandAsync();
         EnterHistoryMode();
+        // Наполняем обе секции сайдбара — чаты видны и в режиме истории.
         await LoadHistoryAsync();
+        await LoadChatConversationsAsync();
     }
 
     private async Task LoadHistoryAsync()
