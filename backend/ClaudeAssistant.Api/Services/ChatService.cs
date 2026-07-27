@@ -108,6 +108,13 @@ public class ChatService(
         await db.SaveChangesAsync(cancellationToken);
 
         var (reply, generatedFiles, usage) = await GenerateAsync(userId, conversation.Id, conversation.Model, messages, cancellationToken);
+        logger.LogInformation(
+            "Chat usage: input={Input} cacheRead={CacheRead} output={Output} costUsd={Cost}",
+            usage.InputTokens,
+            usage.CacheReadTokens,
+            usage.OutputTokens,
+            usage.ProviderCostUsd
+        );
 
         db.ChatMessages.Add(new ChatMessage
         {
@@ -284,6 +291,18 @@ public class ChatService(
                 else if (streamEvent.TryPickDelta(out var msgDelta) && TryGetUsageElement(msgDelta.RawData, out var deltaUsage))
                 {
                     outputTokens = RawNum(deltaUsage, "output_tokens");
+                    // Агрегатор (aitunnel) кладёт ПОЛНЫЙ usage в финальный message_delta,
+                    // а не в message_start — поэтому вход/кэш берём и отсюда (если пришли).
+                    var deltaInput = RawNum(deltaUsage, "input_tokens") + RawNum(deltaUsage, "cache_creation_input_tokens");
+                    var deltaCacheRead = RawNum(deltaUsage, "cache_read_input_tokens");
+                    if (deltaInput > 0)
+                    {
+                        inputTokens = deltaInput;
+                    }
+                    if (deltaCacheRead > 0)
+                    {
+                        cacheReadTokens = deltaCacheRead;
+                    }
                     var c = RawCost(deltaUsage);
                     if (c > 0)
                     {
