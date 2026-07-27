@@ -4,6 +4,17 @@
 
 <h2>Статистика</h2>
 
+<div style="display:flex; gap:8px; margin:0 0 14px">
+    @foreach (var (period, label) in _periods)
+    {
+        <button type="button"
+                @onclick="() => SetPeriodAsync(period)"
+                style="@(_period == period ? ActiveTabStyle : TabStyle)">
+            @label
+        </button>
+    }
+</div>
+
 <p class="hint">
     Стоимость в рублях — оценка по ставкам компании (₽ за 1 млн токенов):
     Sonnet — вход 400 / выход 2000, Haiku — вход 200 / выход 1000; чтение из кэша
@@ -63,10 +74,40 @@ else
 }
 
 @code {
+    private enum Period { Day, Week, Month, All }
+
+    private static readonly (Period Period, string Label)[] _periods =
+    [
+        (Period.Day, "День"),
+        (Period.Week, "Неделя"),
+        (Period.Month, "Месяц"),
+        (Period.All, "Всё время"),
+    ];
+
+    private const string TabStyle = "padding:6px 14px; border:1px solid var(--border,#ccc); border-radius:8px; background:transparent; cursor:pointer";
+    private const string ActiveTabStyle = "padding:6px 14px; border:1px solid var(--accent,#2563eb); border-radius:8px; background:var(--accent,#2563eb); color:#fff; cursor:pointer";
+
+    private Period _period = Period.All;
     private AdminService.UsageStatsResult? _stats;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task SetPeriodAsync(Period period)
     {
-        _stats = await AdminService.GetUsageStatsAsync();
+        _period = period;
+        _stats = null;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        DateTimeOffset? since = _period switch
+        {
+            Period.Day => DateTimeOffset.UtcNow.AddDays(-1),
+            Period.Week => DateTimeOffset.UtcNow.AddDays(-7),
+            Period.Month => DateTimeOffset.UtcNow.AddMonths(-1),
+            _ => null,
+        };
+        _stats = await AdminService.GetUsageStatsAsync(since);
     }
 }

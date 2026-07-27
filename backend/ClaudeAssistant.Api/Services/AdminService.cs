@@ -33,10 +33,13 @@ public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub, PricingS
 
     public record UsageStatsResult(List<UserUsageStats> Users, UserUsageStats Totals);
 
-    public async Task<UsageStatsResult> GetUsageStatsAsync()
+    // since == null — за всё время; иначе только записи с CreatedAt >= since
+    // (день/неделя/месяц выбираются в веб-панели).
+    public async Task<UsageStatsResult> GetUsageStatsAsync(DateTimeOffset? since = null)
     {
         // Основной поток: агрегируем по (пользователь, модель) — ставка зависит от модели.
         var requestAgg = await db.RequestHistory
+            .Where(r => since == null || r.CreatedAt >= since)
             .GroupBy(r => new { r.UserId, r.Model })
             .Select(g => new
             {
@@ -52,7 +55,7 @@ public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub, PricingS
 
         // Чат: считаем ответы модели (IsUser=false), модель берём из диалога.
         var chatAgg = await db.ChatMessages
-            .Where(m => !m.IsUser)
+            .Where(m => !m.IsUser && (since == null || m.CreatedAt >= since))
             .GroupBy(m => new { m.Conversation!.UserId, m.Conversation.Model })
             .Select(g => new
             {

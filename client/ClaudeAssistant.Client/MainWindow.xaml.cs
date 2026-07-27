@@ -563,6 +563,44 @@ public partial class MainWindow : Window
         ScrollThreadToBottom();
     }
 
+    // Восстанавливает сохранённый диалог из истории в тред отдельными пузырями:
+    // исходный ответ + пары «вопрос/ответ» продолжений. Сервер склеивает их в
+    // ResultText маркером "\n\n---\n\n**Вопрос:** …" (см. RequestsController.Continue).
+    // Продолжить нельзя (диалог уже вне кэша сервера) — поле follow-up скрыто.
+    private void RestoreHistoryThread(string resultText)
+    {
+        _thread.Clear();
+        _pending = null;
+        _conversationId = null;
+        _lastAnswerText = resultText;
+        _followUpAttachments.Clear();
+        UpdateAttachmentsText(FollowUpAttachmentsText, _followUpAttachments);
+        SetFollowUpAvailable(false, hint: null);
+
+        const string separator = "\n\n---\n\n**Вопрос:** ";
+        var parts = resultText.Split(separator);
+
+        // Первый фрагмент — исходный ответ (у него нет пользовательского вопроса,
+        // как и у первого сообщения в живом треде).
+        _thread.Add(new ChatMessage(isUser: false, parts[0]));
+
+        for (var i = 1; i < parts.Length; i++)
+        {
+            var chunk = parts[i];
+            // Вопрос — до первого пустого перевода строки, дальше — ответ.
+            var split = chunk.IndexOf("\n\n", StringComparison.Ordinal);
+            var question = (split >= 0 ? chunk[..split] : chunk).Trim();
+            var answer = split >= 0 ? chunk[(split + 2)..] : string.Empty;
+            _thread.Add(new ChatMessage(isUser: true, question));
+            if (answer.Length > 0)
+            {
+                _thread.Add(new ChatMessage(isUser: false, answer));
+            }
+        }
+
+        ScrollThreadToBottom();
+    }
+
     private void SetFollowUpAvailable(bool available, string? hint)
     {
         FollowUpPanel.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
@@ -658,6 +696,12 @@ public partial class MainWindow : Window
             ? "Готово"
             : $"Готово · также просмотрено: {result.AccessedFiles}";
         ScrollThreadToBottom();
+
+        // Сервер дописал вопрос+ответ в ту же запись истории (ResultText) — сбрасываем
+        // кэш и перезагружаем список, иначе в сайдборе останется устаревшая версия с
+        // одним первым ответом (при повторном открытии записи продолжение «пропадало»).
+        _historyCache = null;
+        await LoadHistoryAsync();
     }
 
     private void OnCopyClick(object sender, RoutedEventArgs e)
@@ -1092,9 +1136,10 @@ public partial class MainWindow : Window
         EnterHistoryMode();
 
         // Запись из истории продолжить нельзя (диалог живёт только в памяти сервера
-        // в пределах окна кэша) — показываем как одиночный ответ без поля follow-up.
+        // в пределах окна кэша) — показываем сохранённый диалог без поля follow-up,
+        // восстанавливая вопросы/ответы отдельными пузырями.
         var text = item.Entry.ResultText ?? item.Entry.ErrorMessage ?? string.Empty;
-        StartThreadWithAnswer(text, conversationId: null);
+        RestoreHistoryThread(text);
         StatusText.Text = string.IsNullOrEmpty(item.Entry.AccessedFiles)
             ? $"Из истории: {item.Entry.CreatedAt.LocalDateTime:dd.MM.yyyy HH:mm}"
             : $"Из истории: {item.Entry.CreatedAt.LocalDateTime:dd.MM.yyyy HH:mm} · также просмотрено: {item.Entry.AccessedFiles}";
