@@ -953,6 +953,42 @@ public partial class MainWindow : Window
         return text.Length == 0 ? note : $"{text}\n{note}";
     }
 
+    // ===== Удаление элементов сайдбара =====
+
+    private async void OnDeleteChatClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Microsoft.UI.Xaml.Controls.Button)?.DataContext is not ChatConversationInfo conversation)
+        {
+            return;
+        }
+        var ok = await _backendClient.DeleteChatConversationAsync(conversation.Id);
+        if (!ok)
+        {
+            return;
+        }
+        _chatConversations.Remove(conversation);
+        if (_chatConversationId == conversation.Id)
+        {
+            // Удалили открытый диалог — сбрасываем окно на новый чат.
+            StartNewChat();
+        }
+    }
+
+    private async void OnDeleteHistoryClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Microsoft.UI.Xaml.Controls.Button)?.DataContext is not HistoryListItem item)
+        {
+            return;
+        }
+        var ok = await _backendClient.DeleteHistoryAsync(item.Entry.Id);
+        if (!ok)
+        {
+            return;
+        }
+        _historyCache?.RemoveAll(h => h.Id == item.Entry.Id);
+        await LoadHistoryAsync();
+    }
+
     private async void OnHistoryClick(object sender, RoutedEventArgs e)
     {
         await ExpandAsync();

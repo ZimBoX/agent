@@ -119,6 +119,34 @@ public class BackendClient
         return await response.Content.ReadFromJsonAsync<List<HistoryEntry>>();
     }
 
+    public async Task<bool> DeleteHistoryAsync(Guid id)
+    {
+        AttachAuth();
+        try
+        {
+            var response = await _http.DeleteAsync($"/api/requests/history/{id}");
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteChatConversationAsync(Guid id)
+    {
+        AttachAuth();
+        try
+        {
+            var response = await _http.DeleteAsync($"/api/chat/conversations/{id}");
+            return response.IsSuccessStatusCode;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+    }
+
     // Ровно один из двух: templateId (готовый шаблон) или customPrompt (свой текст).
     // objectFolder — необязательный, только для шаблонов с AllowFileSearch: реальный
     // абсолютный путь к папке (папка прикреплённого файла или папка, из которой

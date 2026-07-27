@@ -181,9 +181,18 @@
                           Background="Transparent" BorderThickness="0" Padding="0">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="services:ChatConversationInfo">
-                            <TextBlock Text="{x:Bind Title}" FontSize="13" Margin="0,6"
-                                       Foreground="{StaticResource AppTextPrimaryBrush}"
-                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                            <Grid ColumnSpacing="4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{x:Bind Title}" FontSize="13" Margin="0,6" VerticalAlignment="Center"
+                                           Foreground="{StaticResource AppTextPrimaryBrush}"
+                                           TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                <Button Grid.Column="1" Click="OnDeleteChatClick" Content="✕" FontSize="11" VerticalAlignment="Center"
+                                        Background="Transparent" BorderThickness="0" Padding="6,2" CornerRadius="6"
+                                        Foreground="{StaticResource AppTextSecondaryBrush}" ToolTipService.ToolTip="Удалить чат" />
+                            </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
@@ -195,11 +204,20 @@
                           Background="Transparent" BorderThickness="0" Padding="0">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="local:HistoryListItem">
-                            <StackPanel Margin="0,6" Spacing="1">
-                                <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="SemiBold"
-                                           Foreground="{StaticResource AppTextPrimaryBrush}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Text="{x:Bind Subtitle}" FontSize="11" Foreground="{StaticResource AppTextSecondaryBrush}" />
-                            </StackPanel>
+                            <Grid ColumnSpacing="4" Margin="0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="1">
+                                    <TextBlock Text="{x:Bind Title}" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{StaticResource AppTextPrimaryBrush}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{x:Bind Subtitle}" FontSize="11" Foreground="{StaticResource AppTextSecondaryBrush}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Click="OnDeleteHistoryClick" Content="✕" FontSize="11" VerticalAlignment="Center"
+                                        Background="Transparent" BorderThickness="0" Padding="6,2" CornerRadius="6"
+                                        Foreground="{StaticResource AppTextSecondaryBrush}" ToolTipService.ToolTip="Удалить из истории" />
+                            </Grid>
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
@@ -287,15 +305,20 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="FollowUpAttachButton" Grid.Column="0" Click="OnFollowUpAttachClick" Content="📎"
+                        <Button x:Name="FollowUpAttachButton" Grid.Column="0" Click="OnFollowUpAttachClick" Height="38" Width="42"
                                 ToolTipService.ToolTip="Прикрепить файлы (.docx, .xlsx, .pdf)"
                                 Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
-                                BorderThickness="1" CornerRadius="10" Padding="10,0" />
-                        <TextBox x:Name="FollowUpBox" Grid.Column="1" PlaceholderText="Продолжить диалог... (Enter — отправить)"
+                                BorderThickness="1" CornerRadius="10" Padding="0">
+                            <Path Data="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                                  Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="2" StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                        <TextBox x:Name="FollowUpBox" Grid.Column="1" Height="38" VerticalContentAlignment="Center"
+                                 PlaceholderText="Продолжить диалог... (Enter — отправить)"
                                  AcceptsReturn="False" TextWrapping="Wrap" KeyDown="OnFollowUpKeyDown"
                                  Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
                                  BorderThickness="1" CornerRadius="10" />
-                        <Button x:Name="FollowUpSend" Grid.Column="2" Click="OnFollowUpSendClick"
+                        <Button x:Name="FollowUpSend" Grid.Column="2" Click="OnFollowUpSendClick" Height="38"
                                 Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
                                 CornerRadius="10" Padding="16,0" Content="Отправить" />
                     </Grid>
@@ -314,15 +337,20 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Button x:Name="ChatAttachButton" Grid.Column="0" Click="OnChatAttachClick" Content="📎"
+                        <Button x:Name="ChatAttachButton" Grid.Column="0" Click="OnChatAttachClick" Height="38" Width="42"
                                 ToolTipService.ToolTip="Прикрепить файлы (.docx, .xlsx, .pdf)"
                                 Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
-                                BorderThickness="1" CornerRadius="10" Padding="10,0" />
-                        <TextBox x:Name="ChatInputBox" Grid.Column="1" PlaceholderText="Сообщение… (Enter — отправить)"
+                                BorderThickness="1" CornerRadius="10" Padding="0">
+                            <Path Data="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                                  Stroke="{StaticResource AppTextSecondaryBrush}" StrokeThickness="2" StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                        <TextBox x:Name="ChatInputBox" Grid.Column="1" Height="38" VerticalContentAlignment="Center"
+                                 PlaceholderText="Сообщение… (Enter — отправить)"
                                  AcceptsReturn="False" TextWrapping="Wrap" KeyDown="OnChatInputKeyDown"
                                  Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
                                  BorderThickness="1" CornerRadius="10" />
-                        <Button x:Name="ChatSendButton" Grid.Column="2" Click="OnChatSendClick"
+                        <Button x:Name="ChatSendButton" Grid.Column="2" Click="OnChatSendClick" Height="38"
                                 Background="{StaticResource AppAccentBrush}" Foreground="White" FontWeight="SemiBold"
                                 CornerRadius="10" Padding="16,0" Content="Отправить" />
                     </Grid>

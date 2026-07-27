@@ -71,4 +71,11 @@ public class ChatController(ChatService chatService, MultiFileExtractionService 
         var messages = await chatService.GetMessagesAsync(UserId, conversationId, cancellationToken);
         return messages is null ? NotFound() : Ok(messages);
     }
+
+    [HttpDelete("conversations/{conversationId:guid}")]
+    public async Task<IActionResult> DeleteConversation(Guid conversationId, CancellationToken cancellationToken)
+    {
+        var ok = await chatService.DeleteConversationAsync(UserId, conversationId, cancellationToken);
+        return ok ? NoContent() : NotFound();
+    }
 }

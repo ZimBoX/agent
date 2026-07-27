@@ -71,6 +71,20 @@ public class RequestsController(
         return Ok(history);
     }
 
+    [HttpDelete("history/{id:guid}")]
+    public async Task<IActionResult> DeleteHistory(Guid id)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var entry = await db.RequestHistory.FirstOrDefaultAsync(e => e.Id == id && e.UserId == userId);
+        if (entry is null)
+        {
+            return NotFound();
+        }
+        db.RequestHistory.Remove(entry);
+        await db.SaveChangesAsync();
+        return NoContent();
+    }
+
     // Принимает либо templateId (готовый шаблон), либо customPrompt (свой текст) —
     // ровно одно из двух. Свободный промпт — сознательный выбор вместо попытки
     // заранее угадать полную библиотеку шаблонов под каждую должность (см.

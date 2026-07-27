@@ -264,6 +264,20 @@ public class ChatService(
             .Select(c => new ChatConversationDto(c.Id, c.Title, c.UpdatedAt))
             .ToListAsync(cancellationToken);
 
+    public async Task<bool> DeleteConversationAsync(Guid userId, Guid conversationId, CancellationToken cancellationToken)
+    {
+        var conversation = await db.ChatConversations
+            .FirstOrDefaultAsync(c => c.Id == conversationId && c.UserId == userId, cancellationToken);
+        if (conversation is null)
+        {
+            return false;
+        }
+        // Сообщения удалятся каскадом (FK ChatMessage → ChatConversation, OnDelete Cascade).
+        db.ChatConversations.Remove(conversation);
+        await db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<List<ChatMessageDto>?> GetMessagesAsync(Guid userId, Guid conversationId, CancellationToken cancellationToken)
     {
         var owned = await db.ChatConversations.AnyAsync(c => c.Id == conversationId && c.UserId == userId, cancellationToken);
