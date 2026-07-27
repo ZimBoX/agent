@@ -205,14 +205,26 @@ public partial class App : Application
             // процесс живым), и только потом закрываем окно привязки — иначе между
             // закрытием одного окна и появлением другого HWND-ов нет вообще, и
             // WinUI 3 завершает процесс как "закрыто последнее окно".
-            StartMainApp();
+            //
+            // keepVisible: true — не прятать окно в трей при этом переходе. После
+            // ручной привязки пользователь ждёт, что приложение ОТКРОЕТСЯ, а не
+            // исчезнет. Плюс это чинит подвисание: если единственное окно (MainWindow)
+            // спрятать ровно в момент закрытия окна привязки, у процесса на миг не
+            // остаётся ни одного видимого окна, и WinUI 3 (unpackaged) впадает в
+            // полузакрытое состояние — окно привязки так и висит замороженным
+            // (лечилось только «Завершить → открыть заново»).
+            StartMainApp(keepVisible: true);
             _enrollmentWindow?.Close();
             _enrollmentWindow = null;
         };
         _enrollmentWindow.Activate();
     }
 
-    private void StartMainApp()
+    // keepVisible — не прятать окно в трей даже без путей запуска (переход с окна
+    // привязки: пользователь только что нажал «привязать» и ждёт открытия приложения,
+    // а прятать единственное окно ровно во время закрытия окна привязки ещё и
+    // подвешивало WinUI — см. ShowEnrollment).
+    private void StartMainApp(bool keepVisible = false)
     {
         _mainWindow = new MainWindow();
         _mainWindow.Activate();
@@ -221,7 +233,7 @@ public partial class App : Application
         // перезапуска через explorer — см. LaunchPaths) — сразу показываем окно,
         // это и есть весь смысл сценария. Без путей — обычный тихий старт в трее.
         var launchedWithPaths = LaunchPaths.Count > 0;
-        if (!launchedWithPaths)
+        if (!launchedWithPaths && !keepVisible)
         {
             _mainWindow.AppWindow.Hide();
         }
