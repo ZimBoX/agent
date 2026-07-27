@@ -1,10 +1,12 @@
 using System.Text;
+using System.Text.Json;
 using Anthropic;
 using Anthropic.Models.Messages;
 using ClaudeAssistant.Api.Data;
 using ClaudeAssistant.Api.Dtos;
 using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
+using ClaudeAssistant.Api.Services.FileGeneration;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,6 +21,8 @@ public class ChatService(
     IConfiguration configuration,
     AppDbContext db,
     IHubContext<UpdatesHub> hub,
+    DocumentGenerationService documentGeneration,
+    GeneratedFileStore generatedFileStore,
     ILogger<ChatService> logger
 )
 {
@@ -28,13 +32,30 @@ public class ChatService(
     private const int TitleMaxLength = 48;
     private const int MaxWebSearchUses = 3;
 
+    // Потолок ходов tool-loop за одно сообщение — в чате инструмент один
+    // (create_file), обычно 1-2 хода; ограничение на всякий случай от разгона.
+    private const int MaxToolIterations = 5;
+
     private const string SystemPrompt =
         "Ты — дружелюбный помощник в режиме чата внутреннего корпоративного приложения. "
         + "Отвечай по-русски, ясно и по делу. Если вопрос из строительной/подрядной сферы "
         + "(договоры, сметы, ТЗ, акты) — учитывай эту специфику. "
         + "У тебя есть инструмент веб-поиска (web_search) — используй его, когда нужна "
         + "свежая или актуальная информация из интернета (погода, новости, курсы и т.п.), "
-        + "а не отвечай, что доступа к интернету нет.";
+        + "а не отвечай, что доступа к интернету нет. "
+        + "Если пользователь просит СДЕЛАТЬ файл — таблицу (Excel) или документ Word — "
+        + "используй инструмент create_file, а не вставляй содержимое как текст.";
+
+    // Накопитель клиентского tool_use (create_file) из потока: id, имя и JSON входа,
+    // который собирается по кусочкам (input_json_delta).
+    private sealed class ToolCallAccum(string id, string name)
+    {
+        public string Id { get; } = id;
+        public string Name { get; } = name;
+        public StringBuilder Json { get; } = new();
+    }
+
+    private record ChatToolCall(string Id, string Name, IReadOnlyDictionary<string, JsonElement> Input);
 
     private string Model => configuration["Chat:Model"] ?? "claude-haiku-4.5";
 
@@ -85,7 +106,7 @@ public class ChatService(
         });
         await db.SaveChangesAsync(cancellationToken);
 
-        var reply = await GenerateAsync(userId, conversation.Id, conversation.Model, messages, cancellationToken);
+        var (reply, generatedFiles) = await GenerateAsync(userId, conversation.Id, conversation.Model, messages, cancellationToken);
 
         db.ChatMessages.Add(new ChatMessage
         {
@@ -97,7 +118,12 @@ public class ChatService(
         conversation.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
-        return new ChatSendResponse(conversation.Id, conversation.Title, reply);
+        // Сгенерированные файлы эфемерны (TTL 1 час, не в БД) — отдаём их только в
+        // этом ответе; при перечитывании истории кнопок скачивания уже не будет.
+        var files = generatedFiles.Count > 0
+            ? generatedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName)).ToList()
+            : null;
+        return new ChatSendResponse(conversation.Id, conversation.Title, reply, files);
     }
 
     private async Task<ChatConversation> LoadOrCreateAsync(
@@ -142,10 +168,15 @@ public class ChatService(
         return trimmed[..TitleMaxLength].TrimEnd() + "…";
     }
 
-    // Стримит ответ модели по токенам в SignalR и возвращает полный текст. При
-    // сбое стриминга (агрегатор мог не поддержать SSE на нативном маршруте)
-    // откатывается на обычный запрос-ответ и отдаёт весь текст одним куском.
-    private async Task<string> GenerateAsync(
+    // Гоняет ход(ы) диалога: стримит ответ модели по токенам в SignalR и, если
+    // модель вызвала create_file, генерирует файл(ы) и продолжает диалог, пока не
+    // получит финальный текст. Возвращает полный текст + список созданных файлов.
+    //
+    // web_search — СЕРВЕРНЫЙ инструмент Anthropic: выполняется внутри одного вызова
+    // на стороне агрегатора и в наш tool-loop не попадает. create_file — КЛИЕНТСКИЙ:
+    // модель им «останавливается» (stop_reason=tool_use), мы его выполняем и
+    // продолжаем. Поэтому цикл управляется наличием клиентских tool_use в ходе.
+    private async Task<(string Reply, List<GeneratedFileRef> Files)> GenerateAsync(
         Guid userId,
         Guid conversationId,
         string model,
@@ -154,30 +185,109 @@ public class ChatService(
     )
     {
         var client = CreateClient();
-        // web_search — серверный инструмент Anthropic: агрегатор его поддерживает
-        // (как и в основном потоке, см. ChatCompletionService.RunTurnNative).
-        // Выполняется внутри одного вызова, отдельного tool-loop не требует.
-        var parameters = new MessageCreateParams
-        {
-            Model = model,
-            MaxTokens = MaxOutputTokens,
-            System = new List<TextBlockParam> { new() { Text = SystemPrompt } },
-            Tools = new List<ToolUnion> { new WebSearchTool20250305 { MaxUses = MaxWebSearchUses } },
-            Messages = messages,
-        };
+        List<ToolUnion> tools =
+        [
+            new WebSearchTool20250305 { MaxUses = MaxWebSearchUses },
+            DocumentGenerationService.BuildCreateFileTool(),
+        ];
+        var generatedFiles = new List<GeneratedFileRef>();
+        var lastText = "";
 
+        for (var iteration = 0; iteration < MaxToolIterations; iteration++)
+        {
+            var parameters = new MessageCreateParams
+            {
+                Model = model,
+                MaxTokens = MaxOutputTokens,
+                System = new List<TextBlockParam> { new() { Text = SystemPrompt } },
+                Tools = tools,
+                Messages = messages,
+            };
+
+            var (turnText, toolCalls) = await StreamTurnAsync(client, parameters, userId, conversationId, cancellationToken);
+            lastText = turnText;
+
+            if (toolCalls.Count == 0)
+            {
+                // Финальный ход — модель ответила текстом без создания файлов.
+                var text = string.IsNullOrWhiteSpace(turnText) ? "(пустой ответ)" : turnText;
+                return (text, generatedFiles);
+            }
+
+            // Дописываем ход ассистента (текст-преамбула + tool_use) и результаты
+            // выполнения инструментов, затем крутим следующий ход за финальным текстом.
+            var assistantContent = new List<ContentBlockParam>();
+            if (!string.IsNullOrEmpty(turnText))
+            {
+                assistantContent.Add(new TextBlockParam { Text = turnText });
+            }
+            var toolResults = new List<ContentBlockParam>();
+            foreach (var call in toolCalls)
+            {
+                assistantContent.Add(new ToolUseBlockParam { ID = call.Id, Name = call.Name, Input = call.Input });
+                var resultText = ExecuteCreateFile(call, userId, generatedFiles);
+                toolResults.Add(new ToolResultBlockParam
+                {
+                    ToolUseID = call.Id,
+                    Content = new List<Block> { new TextBlockParam { Text = resultText } },
+                });
+            }
+            messages.Add(new MessageParam { Role = Anthropic.Models.Messages.Role.Assistant, Content = assistantContent });
+            messages.Add(new MessageParam { Role = Anthropic.Models.Messages.Role.User, Content = toolResults });
+        }
+
+        // Исчерпан лимит ходов — отдаём последний полученный текст (или заглушку).
+        return (string.IsNullOrWhiteSpace(lastText) ? "(пустой ответ)" : lastText, generatedFiles);
+    }
+
+    // Один ход: стримит текст по токенам (SignalR) и накапливает клиентские tool_use
+    // (create_file) — их вход собирается из input_json_delta. Возвращает текст хода и
+    // разобранные вызовы инструментов. При обрыве стрима после части контента —
+    // отдаём накопленное; если не пришло вообще ничего — откат на нестримовый вызов.
+    private async Task<(string Text, List<ChatToolCall> ToolCalls)> StreamTurnAsync(
+        AnthropicClient client,
+        MessageCreateParams parameters,
+        Guid userId,
+        Guid conversationId,
+        CancellationToken cancellationToken
+    )
+    {
         var sb = new StringBuilder();
+        var accums = new List<ToolCallAccum>();
+        ToolCallAccum? current = null;
+
         try
         {
             await foreach (var streamEvent in client.Messages.CreateStreaming(parameters, cancellationToken))
             {
-                if (streamEvent.TryPickContentBlockDelta(out var delta) && delta.Delta.TryPickText(out var textDelta))
+                if (streamEvent.TryPickContentBlockStart(out var start))
                 {
-                    sb.Append(textDelta.Text);
-                    // Токены отправляем последовательно (await) — так сохраняется порядок.
-                    await hub.Clients
-                        .User(userId.ToString())
-                        .SendAsync(UpdatesHubEvents.ChatToken, conversationId, textDelta.Text, cancellationToken);
+                    // Начало нового блока: клиентский tool_use (create_file) начинаем
+                    // копить; текст и серверные блоки (web_search) — не наши.
+                    current = start.ContentBlock.TryPickToolUse(out var tub) ? new ToolCallAccum(tub.ID, tub.Name) : null;
+                    if (current is not null)
+                    {
+                        accums.Add(current);
+                    }
+                }
+                else if (streamEvent.TryPickContentBlockDelta(out var delta))
+                {
+                    if (delta.Delta.TryPickText(out var textDelta))
+                    {
+                        sb.Append(textDelta.Text);
+                        // Токены отправляем последовательно (await) — сохраняется порядок.
+                        await hub.Clients
+                            .User(userId.ToString())
+                            .SendAsync(UpdatesHubEvents.ChatToken, conversationId, textDelta.Text, cancellationToken);
+                    }
+                    else if (delta.Delta.TryPickInputJson(out var inputJson))
+                    {
+                        current?.Json.Append(inputJson.PartialJson);
+                    }
+                }
+                else if (streamEvent.TryPickContentBlockStop(out _))
+                {
+                    current = null;
                 }
             }
         }
@@ -185,29 +295,94 @@ public class ChatService(
         {
             throw;
         }
-        catch (Exception ex) when (sb.Length > 0)
+        catch (Exception ex) when (sb.Length > 0 || accums.Count > 0)
         {
-            // Стрим оборвался ПОСЛЕ того, как часть/весь текст уже пришёл (например,
-            // редкий upstream api_error в самом конце ответа с web_search) — отдаём
-            // накопленное как ответ, не роняя запрос.
-            logger.LogWarning(ex, "Стрим чата оборвался после части текста — отдаём накопленное");
-            return sb.ToString();
+            // Стрим оборвался после части контента (редкий upstream api_error в конце) —
+            // отдаём накопленное, не роняя запрос.
+            logger.LogWarning(ex, "Стрим чата оборвался после части контента — отдаём накопленное");
+            return (sb.ToString(), ParseToolCalls(accums));
         }
         catch (Exception ex)
         {
             // Совсем ничего не пришло (агрегатор не отдал SSE) — откат на обычный
-            // запрос-ответ, ответ отдаём одним "токеном".
+            // запрос-ответ; текст отдаём одним «токеном», tool_use разбираем из ответа.
             logger.LogWarning(ex, "Стриминг чата не удался — откат на обычный запрос-ответ");
             var response = await client.Messages.Create(parameters, cancellationToken);
-            var full = ExtractText(response);
-            await hub.Clients
-                .User(userId.ToString())
-                .SendAsync(UpdatesHubEvents.ChatToken, conversationId, full, cancellationToken);
-            return full;
+            var (text, calls) = ExtractTurn(response);
+            if (!string.IsNullOrEmpty(text))
+            {
+                await hub.Clients
+                    .User(userId.ToString())
+                    .SendAsync(UpdatesHubEvents.ChatToken, conversationId, text, cancellationToken);
+            }
+            return (text, calls);
         }
 
-        var text = sb.ToString();
-        return string.IsNullOrWhiteSpace(text) ? "(пустой ответ)" : text;
+        return (sb.ToString(), ParseToolCalls(accums));
+    }
+
+    private static List<ChatToolCall> ParseToolCalls(List<ToolCallAccum> accums)
+    {
+        var calls = new List<ChatToolCall>();
+        foreach (var a in accums)
+        {
+            IReadOnlyDictionary<string, JsonElement> input;
+            var json = a.Json.ToString();
+            try
+            {
+                input = string.IsNullOrWhiteSpace(json)
+                    ? new Dictionary<string, JsonElement>()
+                    : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json) ?? new Dictionary<string, JsonElement>();
+            }
+            catch (JsonException)
+            {
+                // Оборвавшийся/битый JSON инструмента — пропускаем этот вызов.
+                continue;
+            }
+            calls.Add(new ChatToolCall(a.Id, a.Name, input));
+        }
+        return calls;
+    }
+
+    // Разбирает нестримовый ответ на текст + клиентские tool_use (для отката).
+    private static (string Text, List<ChatToolCall> ToolCalls) ExtractTurn(Message response)
+    {
+        var sb = new StringBuilder();
+        var calls = new List<ChatToolCall>();
+        foreach (var block in response.Content)
+        {
+            if (block.TryPickText(out TextBlock? textBlock))
+            {
+                sb.Append(textBlock.Text);
+            }
+            else if (block.TryPickToolUse(out ToolUseBlock? toolUse))
+            {
+                calls.Add(new ChatToolCall(toolUse.ID, toolUse.Name, toolUse.Input));
+            }
+        }
+        return (sb.ToString(), calls);
+    }
+
+    // Выполняет create_file: генерирует файл, кладёт в эфемерное хранилище,
+    // регистрирует ссылку. Модели возвращаем короткое подтверждение или текст ошибки.
+    private string ExecuteCreateFile(ChatToolCall call, Guid userId, List<GeneratedFileRef> generatedFiles)
+    {
+        if (call.Name != "create_file")
+        {
+            return $"Неизвестный инструмент: {call.Name}";
+        }
+        try
+        {
+            var (bytes, fileName, contentType) = documentGeneration.Generate(call.Input);
+            var reference = generatedFileStore.Save(userId, fileName, contentType, bytes);
+            generatedFiles.Add(reference);
+            return $"Файл «{fileName}» успешно создан и приложен к ответу. Кратко подтверди это пользователю.";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Не удалось сгенерировать файл через create_file (чат)");
+            return $"Не удалось создать файл: {ex.Message}. Проверь входные данные и попробуй ещё раз.";
+        }
     }
 
     private static List<ContentBlockParam> BuildUserContent(string text, IReadOnlyList<byte[]>? images)
@@ -223,20 +398,6 @@ public class ChatService(
             );
         }
         return parts;
-    }
-
-    private static string ExtractText(Message response)
-    {
-        var sb = new StringBuilder();
-        foreach (var block in response.Content)
-        {
-            if (block.TryPickText(out TextBlock? textBlock))
-            {
-                sb.Append(textBlock.Text);
-            }
-        }
-        var text = sb.ToString();
-        return string.IsNullOrWhiteSpace(text) ? "(пустой ответ)" : text;
     }
 
     private AnthropicClient CreateClient()

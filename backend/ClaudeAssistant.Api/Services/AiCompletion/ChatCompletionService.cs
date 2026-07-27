@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Anthropic;
 using Anthropic.Models.Messages;
+using ClaudeAssistant.Api.Services.FileGeneration;
 using ClaudeAssistant.Api.Services.FileTextExtraction;
 using ClaudeAssistant.Api.Services.ProjectFiles;
 using OpenAI;
@@ -11,7 +12,10 @@ using OpenAI.Chat;
 
 namespace ClaudeAssistant.Api.Services.AiCompletion;
 
-public record AgenticCompletionResult(string ResultText, List<string> AccessedFiles);
+// GeneratedFiles — файлы, созданные моделью через инструмент create_file на этом
+// ходу (docx/xlsx), которые клиент предложит скачать. Пусто, если модель файлов не
+// делала.
+public record AgenticCompletionResult(string ResultText, List<string> AccessedFiles, List<GeneratedFileRef> GeneratedFiles);
 
 // Диалог не найден или истёк (окно кэша, 1 час). Контроллер отвечает 410 —
 // продолжать нельзя, контекст уже выпал из кэша.
@@ -30,6 +34,8 @@ public class ChatCompletionService(
     IConfiguration configuration,
     SandboxedFileAccessService fileAccess,
     ConversationStore conversationStore,
+    DocumentGenerationService documentGeneration,
+    GeneratedFileStore generatedFileStore,
     ILogger<ChatCompletionService> logger
 )
 {
@@ -116,7 +122,7 @@ public class ChatCompletionService(
         {
             var legacy = sandboxRoot is not null
                 ? await CompleteWithFileSearchAsyncLegacy(model, systemPrompt, userText, sandboxRoot, userId, images, cancellationToken)
-                : new AgenticCompletionResult(await CompleteAsyncLegacy(model, systemPrompt, userText, images, cancellationToken), []);
+                : new AgenticCompletionResult(await CompleteAsyncLegacy(model, systemPrompt, userText, images, cancellationToken), [], []);
             return (legacy, null);
         }
 
@@ -211,7 +217,14 @@ public class ChatCompletionService(
         // решает, искать ли (тратит ~рубли только когда реально нужно). Выполняется
         // на стороне Anthropic внутри одного вызова (stop_reason=end_turn), поэтому
         // отдельной обработки в нашем tool-loop не требует — только объявления.
-        List<ToolUnion> tools = [new WebSearchTool20250305 { MaxUses = MaxWebSearchUses }];
+        // create_file — клиентский инструмент: модель просит собрать файл (docx/xlsx),
+        // мы его генерируем (см. DocumentGenerationService) и прикладываем к ответу для
+        // скачивания. Доступен ВЕЗДЕ (поиск по папке, прикреплённые файлы, продолжение).
+        List<ToolUnion> tools =
+        [
+            new WebSearchTool20250305 { MaxUses = MaxWebSearchUses },
+            DocumentGenerationService.BuildCreateFileTool(),
+        ];
         if (sandboxRoot is not null)
         {
             tools.Add(BuildListFilesTool());
@@ -219,6 +232,7 @@ public class ChatCompletionService(
         }
 
         var accessedFiles = new List<string>();
+        var generatedFiles = new List<GeneratedFileRef>();
         var totalDocumentChars = 0;
         var totalToolImages = 0;
 
@@ -250,7 +264,7 @@ public class ChatCompletionService(
             {
                 var answer = RequireNonEmptyTextNative(response);
                 AppendAssistantAnswer(messages, answer);
-                return new AgenticCompletionResult(answer, accessedFiles);
+                return new AgenticCompletionResult(answer, accessedFiles, generatedFiles);
             }
 
             List<ContentBlockParam> assistantContent = [];
@@ -270,9 +284,10 @@ public class ChatCompletionService(
 
                     var (content, addedChars, addedImages) = await ExecuteToolAsyncNative(
                         toolUse,
-                        sandboxRoot!,
+                        sandboxRoot,
                         userId,
                         accessedFiles,
+                        generatedFiles,
                         totalDocumentChars,
                         totalToolImages
                     );
@@ -303,7 +318,7 @@ public class ChatCompletionService(
         LogUsageNative(finalResponse);
         var finalAnswer = RequireNonEmptyTextNative(finalResponse);
         AppendAssistantAnswer(messages, finalAnswer);
-        return new AgenticCompletionResult(finalAnswer, accessedFiles);
+        return new AgenticCompletionResult(finalAnswer, accessedFiles, generatedFiles);
     }
 
     // Человекочитаемый статус для конкретного вызова инструмента — показывается
@@ -318,6 +333,8 @@ public class ChatCompletionService(
                 return $"Читаю: {name}";
             case "list_files":
                 return "Просматриваю файлы…";
+            case "create_file":
+                return "Готовлю файл…";
             default:
                 return "Работаю…";
         }
@@ -391,13 +408,21 @@ public class ChatCompletionService(
 
     private async Task<(List<Block> Content, int AddedChars, int AddedImages)> ExecuteToolAsyncNative(
         ToolUseBlock toolUse,
-        string sandboxRoot,
+        string? sandboxRoot,
         Guid userId,
         List<string> accessedFiles,
+        List<GeneratedFileRef> generatedFiles,
         int totalDocumentCharsSoFar,
         int totalToolImagesSoFar
     )
     {
+        // create_file не зависит от папки-объекта — обрабатываем до всего, что
+        // требует sandboxRoot.
+        if (toolUse.Name == "create_file")
+        {
+            return (GenerateFileResultNative(toolUse, userId, generatedFiles), 0, 0);
+        }
+
         try
         {
             var path = "";
@@ -415,7 +440,7 @@ public class ChatCompletionService(
             switch (toolUse.Name)
             {
                 case "list_files":
-                    var entries = fileAccess.ListFiles(sandboxRoot, path, userId);
+                    var entries = fileAccess.ListFiles(sandboxRoot!, path, userId);
                     return (TextResultNative(entries.Count > 0 ? string.Join("\n", entries) : "(папка пуста)"), 0, 0);
 
                 case "read_document":
@@ -430,7 +455,7 @@ public class ChatCompletionService(
                         );
                     }
 
-                    var extraction = await fileAccess.ReadDocumentAsync(sandboxRoot, path, userId);
+                    var extraction = await fileAccess.ReadDocumentAsync(sandboxRoot!, path, userId);
                     if (!accessedFiles.Contains(path))
                     {
                         accessedFiles.Add(path);
@@ -560,6 +585,26 @@ public class ChatCompletionService(
     }
 
     private static List<Block> TextResultNative(string text) => [new TextBlockParam { Text = text }];
+
+    // Выполняет create_file: генерирует файл, кладёт в эфемерное хранилище и
+    // регистрирует ссылку (её вернёт AgenticCompletionResult). Модели возвращаем
+    // короткое подтверждение (без байтов). Ошибку генерации отдаём текстом —
+    // модель сможет поправить входные данные и попробовать снова.
+    private List<Block> GenerateFileResultNative(ToolUseBlock toolUse, Guid userId, List<GeneratedFileRef> generatedFiles)
+    {
+        try
+        {
+            var (bytes, fileName, contentType) = documentGeneration.Generate(toolUse.Input);
+            var reference = generatedFileStore.Save(userId, fileName, contentType, bytes);
+            generatedFiles.Add(reference);
+            return TextResultNative($"Файл «{fileName}» успешно создан и приложен к ответу. Кратко подтверди это пользователю.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Не удалось сгенерировать файл через create_file");
+            return TextResultNative($"Не удалось создать файл: {ex.Message}. Проверь входные данные (format, filename, sheets/markdown) и попробуй ещё раз.");
+        }
+    }
 
     // Точка кэша с TTL 1 час — переиспользуется на system-блоке и на скользящей
     // точке документов. 1 час (а не дефолтные 5 минут) — чтобы продолжение диалога
@@ -713,7 +758,7 @@ public class ChatCompletionService(
 
             if (completion.Value.FinishReason != ChatFinishReason.ToolCalls)
             {
-                return new AgenticCompletionResult(RequireNonEmptyTextLegacy(completion.Value), accessedFiles);
+                return new AgenticCompletionResult(RequireNonEmptyTextLegacy(completion.Value), accessedFiles, []);
             }
 
             messages.Add(new AssistantChatMessage(completion.Value));
@@ -741,7 +786,7 @@ public class ChatCompletionService(
         // ответ ниже (RequireNonEmptyTextLegacy) обязательна: именно на этом пути и
         // случился реальный инцидент с пустым ответом без единой ошибки.
         var finalCompletion = await chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken);
-        return new AgenticCompletionResult(RequireNonEmptyTextLegacy(finalCompletion.Value), accessedFiles);
+        return new AgenticCompletionResult(RequireNonEmptyTextLegacy(finalCompletion.Value), accessedFiles, []);
     }
 
     // Модель иногда возвращает формально успешный ответ (200, без исключений) с

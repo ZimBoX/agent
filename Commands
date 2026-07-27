@@ -1,0 +1,18 @@
+Stop-Process -Name 'ClaudeAssistant.Client' -Force -ErrorAction SilentlyContinue
+Get-AppxPackage -Name 'ClaudeAssistant.ShellExtension' | Remove-AppxPackage -ErrorAction SilentlyContinue
+certutil.exe -delstore Root "ClaudeAssistant" 2>$null
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Remove-Item -Recurse -Force "$env:LocalAppData\ClaudeAssistant.Client" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:LocalAppData\ClaudeAssistant" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "HKCU:\Software\ClaudeAssistant" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "HKCU:\Software\Classes\*\shell\ClaudeAssistant" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "HKCU:\Software\Classes\Directory\shell\ClaudeAssistant" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "HKCU:\Software\Classes\CLSID\{B932951B-8D25-4B01-9CD6-C0AB6801A39E}" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "HKCU:\Software\Classes\Applications\ClaudeAssistant.Client.exe" -ErrorAction SilentlyContinue
+Remove-Item -Force "$env:USERPROFILE\Desktop\ClaudeAssistant.Client.lnk" -ErrorAction SilentlyContinue
+Remove-Item -Force "$env:AppData\Microsoft\Windows\Start Menu\Programs\ClaudeAssistant.Client.lnk" -ErrorAction SilentlyContinue
+Start-Process explorer.exe
+Write-Output 'Cleanup done.'
+
+

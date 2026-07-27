@@ -20,14 +20,22 @@ public record HistoryListItem(string Title, string Subtitle, HistoryEntry Entry)
 // DataTemplate показывать нужный вариант пузыря без конвертеров/селектора.
 public sealed class ChatMessage : System.ComponentModel.INotifyPropertyChanged
 {
-    public ChatMessage(bool isUser, string text, bool isPending = false)
+    public ChatMessage(bool isUser, string text, bool isPending = false, System.Collections.Generic.IReadOnlyList<Services.GeneratedFile>? files = null)
     {
         IsUser = isUser;
         IsPending = isPending;
         _text = text;
+        Files = files ?? System.Array.Empty<Services.GeneratedFile>();
     }
 
     public bool IsUser { get; }
+
+    // Файлы, созданные моделью (create_file) для этого ответа — рендерятся кнопками
+    // «Скачать» под карточкой ассистента. Пусто у обычных сообщений.
+    public System.Collections.Generic.IReadOnlyList<Services.GeneratedFile> Files { get; }
+
+    public Microsoft.UI.Xaml.Visibility FilesVisibility =>
+        !IsUser && !IsPending && Files.Count > 0 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
 
     // Пузырь "печатает…": карточка ассистента с индикатором и живым статусом
     // ("Думаю…", "Читаю: договор.pdf"), пока идёт ответ. Текст обновляется по
@@ -493,7 +501,7 @@ public partial class MainWindow : Window
         StatusText.Text = string.IsNullOrEmpty(result.AccessedFiles)
             ? "Готово"
             : $"Готово · также просмотрено: {result.AccessedFiles}";
-        StartThreadWithAnswer(result.ResultText ?? string.Empty, result.ConversationId);
+        StartThreadWithAnswer(result.ResultText ?? string.Empty, result.ConversationId, result.Files);
 
         // Выполненный запрос попал в историю на сервере — раньше кэш сбрасывался,
         // но сам список никогда не перезапрашивался повторно, поэтому сайдбар
@@ -542,14 +550,14 @@ public partial class MainWindow : Window
 
     // Начинает новый тред: первый элемент — ответ на исходный запрос. Если диалог
     // продолжаем (conversationId != null) — показываем поле ввода follow-up.
-    private void StartThreadWithAnswer(string answer, Guid? conversationId)
+    private void StartThreadWithAnswer(string answer, Guid? conversationId, IReadOnlyList<Services.GeneratedFile>? files = null)
     {
         _thread.Clear();
         _pending = null;
         _lastAnswerText = answer;
         _followUpAttachments.Clear();
         UpdateAttachmentsText(FollowUpAttachmentsText, _followUpAttachments);
-        _thread.Add(new ChatMessage(isUser: false, answer));
+        _thread.Add(new ChatMessage(isUser: false, answer, files: files));
         _conversationId = conversationId;
         SetFollowUpAvailable(conversationId is not null, hint: null);
         ScrollThreadToBottom();
@@ -645,7 +653,7 @@ public partial class MainWindow : Window
         }
 
         _lastAnswerText = result.ResultText ?? string.Empty;
-        _thread.Add(new ChatMessage(isUser: false, _lastAnswerText));
+        _thread.Add(new ChatMessage(isUser: false, _lastAnswerText, files: result.Files));
         StatusText.Text = string.IsNullOrEmpty(result.AccessedFiles)
             ? "Готово"
             : $"Готово · также просмотрено: {result.AccessedFiles}";
@@ -688,6 +696,38 @@ public partial class MainWindow : Window
 
         await Windows.Storage.FileIO.WriteTextAsync(file, _lastAnswerText);
         StatusText.Text = "Сохранено";
+    }
+
+    // Скачивание файла, созданного моделью (create_file). Тянем байты с сервера
+    // (файл живёт ~час) и предлагаем сохранить с исходным именем/расширением.
+    private async void OnDownloadFileClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as Microsoft.UI.Xaml.Controls.Button)?.DataContext is not Services.GeneratedFile file)
+        {
+            return;
+        }
+
+        var bytes = await _backendClient.DownloadGeneratedFileAsync(file.Id);
+        if (bytes is null)
+        {
+            _thread.Add(new ChatMessage(isUser: false, "⚠️ Файл больше недоступен — попросите модель сформировать его заново."));
+            ScrollThreadToBottom();
+            return;
+        }
+
+        var ext = System.IO.Path.GetExtension(file.FileName);
+        var picker = new FileSavePicker();
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+        picker.FileTypeChoices.Add(ext == ".xlsx" ? "Таблица Excel" : "Документ Word", [ext]);
+        picker.SuggestedFileName = System.IO.Path.GetFileNameWithoutExtension(file.FileName);
+
+        var target = await picker.PickSaveFileAsync();
+        if (target is null)
+        {
+            return;
+        }
+        await Windows.Storage.FileIO.WriteBytesAsync(target, bytes);
+        StatusText.Text = $"Сохранено: {target.Name}";
     }
 
     // Кнопка-облачко в шапке — раскрывает окно и переводит его в режим чата.
@@ -843,7 +883,7 @@ public partial class MainWindow : Window
         else
         {
             // Финальный текст — авторитетный (на случай потери части стрим-токенов).
-            _thread.Add(new ChatMessage(isUser: false, result.Reply ?? string.Empty));
+            _thread.Add(new ChatMessage(isUser: false, result.Reply ?? string.Empty, files: result.Files));
             ScrollThreadToBottom();
             var isNew = _chatConversationId is null;
             _chatConversationId = result.ConversationId;

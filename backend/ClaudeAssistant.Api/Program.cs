@@ -102,6 +102,10 @@ builder.Services.AddScoped<SandboxedFileAccessService>();
 // стор Singleton, чтобы состояние переживало отдельные HTTP-запросы.
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<ConversationStore>();
+// Генерация файлов моделью (create_file): сервис без состояния (Singleton) +
+// эфемерное хранилище результатов в памяти (Singleton, TTL 1 час).
+builder.Services.AddSingleton<ClaudeAssistant.Api.Services.FileGeneration.DocumentGenerationService>();
+builder.Services.AddSingleton<ClaudeAssistant.Api.Services.FileGeneration.GeneratedFileStore>();
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddCascadingAuthenticationState();

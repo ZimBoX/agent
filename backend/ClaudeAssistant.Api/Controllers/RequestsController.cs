@@ -232,7 +232,8 @@ public class RequestsController(
                 }
             }
 
-            return Ok(new ExecuteResponse(resultText, accessedFiles, conversationId));
+            var generatedFiles = agenticResult.GeneratedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName)).ToList();
+            return Ok(new ExecuteResponse(resultText, accessedFiles, conversationId, generatedFiles.Count > 0 ? generatedFiles : null));
         }
         // Осознанные, понятные пользователю ошибки (например, пустой ответ модели
         // из-за слишком большого объёма данных объекта — см.
@@ -351,7 +352,8 @@ public class RequestsController(
                 }
             }
 
-            return Ok(new ContinueResponse(result.ResultText, accessedFiles));
+            var generatedFiles = result.GeneratedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName)).ToList();
+            return Ok(new ContinueResponse(result.ResultText, accessedFiles, generatedFiles.Count > 0 ? generatedFiles : null));
         }
         catch (ConversationNotFoundException)
         {

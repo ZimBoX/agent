@@ -19,12 +19,16 @@ public record HistoryEntry(
     string? AccessedFiles
 );
 
+// Файл, сгенерированный моделью (create_file): Id — скачать через
+// GET /api/files/{id}, FileName — с расширением (как показать/сохранить).
+public record GeneratedFile(Guid Id, string FileName);
+
 // ConversationId — если не null, ответ можно продолжить (ContinueAsync) в
 // пределах окна кэша (1 час). null — продолжение недоступно.
-public record ExecuteResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, Guid? ConversationId = null);
+public record ExecuteResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, Guid? ConversationId = null, IReadOnlyList<GeneratedFile>? Files = null);
 
 // Expired=true — сессия истекла (410): продолжать нельзя, нужен новый запрос.
-public record ContinueResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, bool Expired = false);
+public record ContinueResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, bool Expired = false, IReadOnlyList<GeneratedFile>? Files = null);
 
 public record MeInfo(string? FullName, string? Role);
 
@@ -32,7 +36,7 @@ public record ChatConversationInfo(Guid Id, string Title, DateTimeOffset Updated
 
 public record ChatMessageInfo(bool IsUser, string Text, DateTimeOffset CreatedAt);
 
-public record ChatSendResult(bool Success, Guid ConversationId, string? Title, string? Reply, string? ErrorMessage);
+public record ChatSendResult(bool Success, Guid ConversationId, string? Title, string? Reply, string? ErrorMessage, IReadOnlyList<GeneratedFile>? Files = null);
 
 public class BackendClient
 {
@@ -189,7 +193,7 @@ public class BackendClient
             }
 
             var body = await response.Content.ReadFromJsonAsync<ExecuteResponseBody>();
-            return new ExecuteResult(true, body?.ResultText, null, body?.AccessedFiles, body?.ConversationId);
+            return new ExecuteResult(true, body?.ResultText, null, body?.AccessedFiles, body?.ConversationId, body?.Files);
         }
         catch (HttpRequestException ex)
         {
@@ -240,7 +244,7 @@ public class BackendClient
             }
 
             var body = await response.Content.ReadFromJsonAsync<ContinueResponseBody>();
-            return new ContinueResult(true, body?.ResultText, null, body?.AccessedFiles);
+            return new ContinueResult(true, body?.ResultText, null, body?.AccessedFiles, Files: body?.Files);
         }
         catch (HttpRequestException ex)
         {
@@ -312,7 +316,7 @@ public class BackendClient
                 return new ChatSendResult(false, Guid.Empty, null, null, errorText);
             }
             var body = await response.Content.ReadFromJsonAsync<ChatSendResponseBody>();
-            return new ChatSendResult(true, body!.ConversationId, body.Title, body.Reply, null);
+            return new ChatSendResult(true, body!.ConversationId, body.Title, body.Reply, null, body.Files);
         }
         catch (HttpRequestException ex)
         {
@@ -331,6 +335,26 @@ public class BackendClient
         }
     }
 
+    // Скачивает сгенерированный моделью файл по Id. Возвращает байты или null
+    // (файл истёк/недоступен). Имя файла у клиента уже есть из GeneratedFile.
+    public async Task<byte[]?> DownloadGeneratedFileAsync(Guid id)
+    {
+        AttachAuth();
+        try
+        {
+            var response = await _http.GetAsync($"/api/files/{id}");
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+            return await response.Content.ReadAsByteArrayAsync();
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
     private void AttachAuth()
     {
         if (TokenStorage.TryLoad(out var token))
@@ -339,11 +363,11 @@ public class BackendClient
         }
     }
 
-    private record ChatSendResponseBody(Guid ConversationId, string Title, string Reply);
+    private record ChatSendResponseBody(Guid ConversationId, string Title, string Reply, List<GeneratedFile>? Files);
 
     private record BindResponseBody(Guid DeviceId, string UserFullName, string UserRole);
 
-    private record ExecuteResponseBody(string ResultText, string? AccessedFiles, Guid? ConversationId);
+    private record ExecuteResponseBody(string ResultText, string? AccessedFiles, Guid? ConversationId, List<GeneratedFile>? Files);
 
-    private record ContinueResponseBody(string ResultText, string? AccessedFiles);
+    private record ContinueResponseBody(string ResultText, string? AccessedFiles, List<GeneratedFile>? Files);
 }
