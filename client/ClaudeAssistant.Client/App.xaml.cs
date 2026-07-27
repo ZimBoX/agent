@@ -188,7 +188,12 @@ public partial class App : Application
 
         if (TokenStorage.TryLoad(out _))
         {
-            StartMainApp();
+            // --enrolled — это перезапуск сразу после привязки устройства (см.
+            // RelaunchAfterEnrollment): показываем окно, а не прячем в трей, ведь
+            // пользователь только что нажал «Привязать» и ждёт, что приложение
+            // откроется.
+            var justEnrolled = Environment.GetCommandLineArgs().Contains("--enrolled");
+            StartMainApp(keepVisible: justEnrolled);
         }
         else
         {
@@ -199,25 +204,52 @@ public partial class App : Application
     private void ShowEnrollment()
     {
         _enrollmentWindow = new EnrollmentWindow();
-        _enrollmentWindow.Bound += () =>
+        // После привязки не пересаживаем окна в этом же процессе (создать MainWindow
+        // и закрыть окно привязки) — это оказалось намертво подвешивающим WinUI 3
+        // (unpackaged): в момент свопа процесс на миг остаётся без активного окна и
+        // впадает в полузакрытое состояние. Вместо этого просто перезапускаем процесс:
+        // путь «свежий старт → есть токен → StartMainApp» надёжен и уже работает.
+        _enrollmentWindow.Bound += RelaunchAfterEnrollment;
+        _enrollmentWindow.Activate();
+    }
+
+    // Перезапускает приложение начисто после успешной привязки. Это устраняет
+    // проблему пересадки окон (см. ShowEnrollment): новый процесс стартует с уже
+    // сохранённым токеном и открывает главное окно обычным путём, без свопа.
+    private void RelaunchAfterEnrollment()
+    {
+        var exePath = Environment.ProcessPath;
+        if (exePath is null)
         {
-            // Важно: сначала поднимаем MainWindow (создаёт реальный HWND, держит
-            // процесс живым), и только потом закрываем окно привязки — иначе между
-            // закрытием одного окна и появлением другого HWND-ов нет вообще, и
-            // WinUI 3 завершает процесс как "закрыто последнее окно".
-            //
-            // keepVisible: true — не прятать окно в трей при этом переходе. После
-            // ручной привязки пользователь ждёт, что приложение ОТКРОЕТСЯ, а не
-            // исчезнет. Плюс это чинит подвисание: если единственное окно (MainWindow)
-            // спрятать ровно в момент закрытия окна привязки, у процесса на миг не
-            // остаётся ни одного видимого окна, и WinUI 3 (unpackaged) впадает в
-            // полузакрытое состояние — окно привязки так и висит замороженным
-            // (лечилось только «Завершить → открыть заново»).
+            // На всякий случай — если путь к exe недоступен, открываем окно в текущем
+            // процессе (хуже, но лучше, чем ничего).
             StartMainApp(keepVisible: true);
             _enrollmentWindow?.Close();
             _enrollmentWindow = null;
-        };
-        _enrollmentWindow.Activate();
+            return;
+        }
+
+        // Освобождаем single-instance mutex, иначе новый процесс сочтёт себя вторичным
+        // (см. SingleInstanceService) и просто закроется, переслав пути главному.
+        _singleInstance?.Dispose();
+        _singleInstance = null;
+
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(exePath, "--enrolled") { UseShellExecute = true }
+            );
+        }
+        catch
+        {
+            // Перезапуск не удался — открываем окно в текущем процессе как запасной путь.
+            StartMainApp(keepVisible: true);
+            _enrollmentWindow?.Close();
+            _enrollmentWindow = null;
+            return;
+        }
+
+        Environment.Exit(0);
     }
 
     // keepVisible — не прятать окно в трей даже без путей запуска (переход с окна
