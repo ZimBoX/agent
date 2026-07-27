@@ -4,6 +4,7 @@ using ClaudeAssistant.Api.Auth;
 using ClaudeAssistant.Api.Data;
 using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
+using ClaudeAssistant.Api.Services.Pricing;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,8 +13,114 @@ namespace ClaudeAssistant.Api.Services;
 // Общая логика админ-операций — используется и HTTP-контроллером (AdminController,
 // для программного доступа), и веб-панелью (Blazor-компоненты вызывают эти методы
 // напрямую, без HTTP-петли на себя же).
-public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub)
+public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub, PricingService pricing)
 {
+    // Статистика использования по пользователю: запросов, токенов вход/выход,
+    // стоимость в рублях (по ставкам компании) и фактическая стоимость от
+    // агрегатора ($). Запрос = запись основного потока (execute + все его
+    // продолжения одной строкой) ИЛИ один ответ модели в чате.
+    public record UserUsageStats(
+        Guid UserId,
+        string FullName,
+        string Role,
+        int Requests,
+        long InputTokens,
+        long CacheReadTokens,
+        long OutputTokens,
+        decimal RubCost,
+        double ProviderCostUsd
+    );
+
+    public record UsageStatsResult(List<UserUsageStats> Users, UserUsageStats Totals);
+
+    public async Task<UsageStatsResult> GetUsageStatsAsync()
+    {
+        // Основной поток: агрегируем по (пользователь, модель) — ставка зависит от модели.
+        var requestAgg = await db.RequestHistory
+            .GroupBy(r => new { r.UserId, r.Model })
+            .Select(g => new
+            {
+                g.Key.UserId,
+                g.Key.Model,
+                Requests = g.Count(),
+                Input = g.Sum(x => (long)x.InputTokens),
+                CacheRead = g.Sum(x => (long)x.CacheReadTokens),
+                Output = g.Sum(x => (long)x.OutputTokens),
+                Cost = g.Sum(x => x.ProviderCostUsd),
+            })
+            .ToListAsync();
+
+        // Чат: считаем ответы модели (IsUser=false), модель берём из диалога.
+        var chatAgg = await db.ChatMessages
+            .Where(m => !m.IsUser)
+            .GroupBy(m => new { m.Conversation!.UserId, m.Conversation.Model })
+            .Select(g => new
+            {
+                g.Key.UserId,
+                Model = (string?)g.Key.Model,
+                Requests = g.Count(),
+                Input = g.Sum(x => (long)x.InputTokens),
+                CacheRead = g.Sum(x => (long)x.CacheReadTokens),
+                Output = g.Sum(x => (long)x.OutputTokens),
+                Cost = g.Sum(x => x.ProviderCostUsd),
+            })
+            .ToListAsync();
+
+        var users = await db.Users.ToDictionaryAsync(u => u.Id);
+
+        var perUser = new Dictionary<Guid, (int Req, long Inp, long Cr, long Outp, decimal Rub, double Usd)>();
+
+        void Accumulate(Guid userId, string? model, int requests, long input, long cacheRead, long output, double usd)
+        {
+            var rub = pricing.RubCost(model, input, cacheRead, output);
+            perUser.TryGetValue(userId, out var cur);
+            perUser[userId] = (cur.Req + requests, cur.Inp + input, cur.Cr + cacheRead, cur.Outp + output, cur.Rub + rub, cur.Usd + usd);
+        }
+
+        foreach (var a in requestAgg)
+        {
+            Accumulate(a.UserId, a.Model, a.Requests, a.Input, a.CacheRead, a.Output, a.Cost);
+        }
+        foreach (var a in chatAgg)
+        {
+            Accumulate(a.UserId, a.Model, a.Requests, a.Input, a.CacheRead, a.Output, a.Cost);
+        }
+
+        var list = perUser
+            .Select(kv =>
+            {
+                var user = users.GetValueOrDefault(kv.Key);
+                var v = kv.Value;
+                return new UserUsageStats(
+                    kv.Key,
+                    user?.FullName ?? "(удалён)",
+                    user?.Role ?? "",
+                    v.Req,
+                    v.Inp,
+                    v.Cr,
+                    v.Outp,
+                    v.Rub,
+                    v.Usd
+                );
+            })
+            .OrderByDescending(x => x.RubCost)
+            .ToList();
+
+        var totals = new UserUsageStats(
+            Guid.Empty,
+            "Итого",
+            "",
+            list.Sum(x => x.Requests),
+            list.Sum(x => x.InputTokens),
+            list.Sum(x => x.CacheReadTokens),
+            list.Sum(x => x.OutputTokens),
+            list.Sum(x => x.RubCost),
+            list.Sum(x => x.ProviderCostUsd)
+        );
+
+        return new UsageStatsResult(list, totals);
+    }
+
     public async Task<List<User>> ListUsersAsync() =>
         await db.Users.OrderByDescending(u => u.CreatedAt).ToListAsync();
 

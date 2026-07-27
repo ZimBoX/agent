@@ -215,6 +215,11 @@ public class RequestsController(
                 AccessedFiles = accessedFiles,
                 Status = RequestStatus.Success,
                 ResultText = resultText,
+                Model = model,
+                InputTokens = (int)agenticResult.Usage.InputTokens,
+                CacheReadTokens = (int)agenticResult.Usage.CacheReadTokens,
+                OutputTokens = (int)agenticResult.Usage.OutputTokens,
+                ProviderCostUsd = agenticResult.Usage.ProviderCostUsd,
                 CreatedAt = DateTimeOffset.UtcNow,
             };
             db.RequestHistory.Add(historyEntry);
@@ -348,6 +353,12 @@ public class RequestsController(
                             ? accessedFiles
                             : $"{entry.AccessedFiles}, {accessedFiles}";
                     }
+                    // Токены/стоимость продолжения дописываем к той же записи — весь
+                    // диалог (запрос + все follow-up'ы) учитывается одной строкой статистики.
+                    entry.InputTokens += (int)result.Usage.InputTokens;
+                    entry.CacheReadTokens += (int)result.Usage.CacheReadTokens;
+                    entry.OutputTokens += (int)result.Usage.OutputTokens;
+                    entry.ProviderCostUsd += result.Usage.ProviderCostUsd;
                     await db.SaveChangesAsync();
                 }
             }

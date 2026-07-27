@@ -35,5 +35,17 @@ public class RequestHistoryEntry
     public string? ResultText { get; set; }
     public string? ErrorMessage { get; set; }
 
+    // Учёт токенов и стоимости (статистика в админке). Копится по всему запросу,
+    // включая продолжения диалога (continue дописывает в ту же запись). Model —
+    // фактически использованная модель (для рублёвой ставки). InputTokens — «свежий»
+    // вход + запись кэша; CacheReadTokens — чтение из кэша (льготная ставка);
+    // OutputTokens — сгенерированный ответ. ProviderCostUsd — фактическая стоимость
+    // от агрегатора (поле usage.cost, $), сумма по всем вызовам модели в запросе.
+    public string? Model { get; set; }
+    public int InputTokens { get; set; }
+    public int CacheReadTokens { get; set; }
+    public int OutputTokens { get; set; }
+    public double ProviderCostUsd { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 }

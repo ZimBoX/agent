@@ -1,0 +1,72 @@
+@page "/admin/stats"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+
+<h2>Статистика</h2>
+
+<p class="hint">
+    Стоимость в рублях — оценка по ставкам компании (₽ за 1 млн токенов):
+    Sonnet — вход 400 / выход 2000, Haiku — вход 200 / выход 1000; чтение из кэша
+    считается по 10% от ставки входа. «$ факт.» — фактическая стоимость, которую
+    вернул агрегатор (поле <code>usage.cost</code>). Учитываются запросы, сделанные
+    после включения статистики (старые записи — с нулями).
+</p>
+
+@if (_stats is null)
+{
+    <p>Загрузка...</p>
+}
+else if (_stats.Users.Count == 0)
+{
+    <p>Пока нет ни одного запроса с учётом токенов.</p>
+}
+else
+{
+    <table>
+        <thead>
+        <tr>
+            <th>Сотрудник</th>
+            <th>Должность</th>
+            <th style="text-align:right">Запросов</th>
+            <th style="text-align:right">Токенов вход</th>
+            <th style="text-align:right">Токенов выход</th>
+            <th style="text-align:right">Стоимость, ₽</th>
+            <th style="text-align:right">$ факт.</th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var s in _stats.Users)
+        {
+            <tr>
+                <td>@s.FullName</td>
+                <td>@s.Role</td>
+                <td style="text-align:right">@s.Requests.ToString("N0")</td>
+                <td style="text-align:right">@((s.InputTokens + s.CacheReadTokens).ToString("N0"))</td>
+                <td style="text-align:right">@s.OutputTokens.ToString("N0")</td>
+                <td style="text-align:right">@s.RubCost.ToString("N2")</td>
+                <td style="text-align:right">@s.ProviderCostUsd.ToString("F4")</td>
+            </tr>
+        }
+        </tbody>
+        <tfoot>
+        <tr style="font-weight:600; border-top:2px solid var(--border, #ccc)">
+            <td>@_stats.Totals.FullName</td>
+            <td></td>
+            <td style="text-align:right">@_stats.Totals.Requests.ToString("N0")</td>
+            <td style="text-align:right">@((_stats.Totals.InputTokens + _stats.Totals.CacheReadTokens).ToString("N0"))</td>
+            <td style="text-align:right">@_stats.Totals.OutputTokens.ToString("N0")</td>
+            <td style="text-align:right">@_stats.Totals.RubCost.ToString("N2")</td>
+            <td style="text-align:right">@_stats.Totals.ProviderCostUsd.ToString("F4")</td>
+        </tr>
+        </tfoot>
+    </table>
+}
+
+@code {
+    private AdminService.UsageStatsResult? _stats;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stats = await AdminService.GetUsageStatsAsync();
+    }
+}

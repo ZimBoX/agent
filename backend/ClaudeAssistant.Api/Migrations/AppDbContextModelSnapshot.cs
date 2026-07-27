@@ -58,14 +58,26 @@ namespace ClaudeAssistant.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("CacheReadTokens")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("ConversationId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int>("InputTokens")
+                        .HasColumnType("integer");
+
                     b.Property<bool>("IsUser")
                         .HasColumnType("boolean");
+
+                    b.Property<int>("OutputTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("ProviderCostUsd")
+                        .HasColumnType("double precision");
 
                     b.Property<string>("Text")
                         .IsRequired()
@@ -151,6 +163,9 @@ namespace ClaudeAssistant.Api.Migrations
                     b.Property<string>("AccessedFiles")
                         .HasColumnType("text");
 
+                    b.Property<int>("CacheReadTokens")
+                        .HasColumnType("integer");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -163,6 +178,18 @@ namespace ClaudeAssistant.Api.Migrations
                     b.Property<string>("FileNames")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<int>("InputTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Model")
+                        .HasColumnType("text");
+
+                    b.Property<int>("OutputTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("ProviderCostUsd")
+                        .HasColumnType("double precision");
 
                     b.Property<string>("ResultText")
                         .HasColumnType("text");

@@ -12,10 +12,22 @@ using OpenAI.Chat;
 
 namespace ClaudeAssistant.Api.Services.AiCompletion;
 
+// Учёт токенов и фактической стоимости за весь ход (сумма по всем вызовам модели,
+// включая agentic tool-loop). InputTokens — «свежий» вход + запись кэша;
+// CacheReadTokens — чтение из кэша; OutputTokens — ответ; ProviderCostUsd —
+// стоимость от агрегатора (поле usage.cost, $).
+public record struct TokenUsage(long InputTokens, long CacheReadTokens, long OutputTokens, double ProviderCostUsd)
+{
+    public static readonly TokenUsage Empty = default;
+
+    public TokenUsage Add(long input, long cacheRead, long output, double costUsd) =>
+        new(InputTokens + input, CacheReadTokens + cacheRead, OutputTokens + output, ProviderCostUsd + costUsd);
+}
+
 // GeneratedFiles — файлы, созданные моделью через инструмент create_file на этом
 // ходу (docx/xlsx), которые клиент предложит скачать. Пусто, если модель файлов не
-// делала.
-public record AgenticCompletionResult(string ResultText, List<string> AccessedFiles, List<GeneratedFileRef> GeneratedFiles);
+// делала. Usage — токены/стоимость за этот ход.
+public record AgenticCompletionResult(string ResultText, List<string> AccessedFiles, List<GeneratedFileRef> GeneratedFiles, TokenUsage Usage);
 
 // Диалог не найден или истёк (окно кэша, 1 час). Контроллер отвечает 410 —
 // продолжать нельзя, контекст уже выпал из кэша.
@@ -122,7 +134,7 @@ public class ChatCompletionService(
         {
             var legacy = sandboxRoot is not null
                 ? await CompleteWithFileSearchAsyncLegacy(model, systemPrompt, userText, sandboxRoot, userId, images, cancellationToken)
-                : new AgenticCompletionResult(await CompleteAsyncLegacy(model, systemPrompt, userText, images, cancellationToken), [], []);
+                : new AgenticCompletionResult(await CompleteAsyncLegacy(model, systemPrompt, userText, images, cancellationToken), [], [], TokenUsage.Empty);
             return (legacy, null);
         }
 
@@ -233,6 +245,7 @@ public class ChatCompletionService(
 
         var accessedFiles = new List<string>();
         var generatedFiles = new List<GeneratedFileRef>();
+        var usage = TokenUsage.Empty;
         var totalDocumentChars = 0;
         var totalToolImages = 0;
 
@@ -259,12 +272,13 @@ public class ChatCompletionService(
                 cancellationToken
             );
             LogUsageNative(response);
+            usage = AddUsage(usage, response.Usage);
 
             if (response.StopReason != "tool_use")
             {
                 var answer = RequireNonEmptyTextNative(response);
                 AppendAssistantAnswer(messages, answer);
-                return new AgenticCompletionResult(answer, accessedFiles, generatedFiles);
+                return new AgenticCompletionResult(answer, accessedFiles, generatedFiles, usage);
             }
 
             List<ContentBlockParam> assistantContent = [];
@@ -316,9 +330,31 @@ public class ChatCompletionService(
             cancellationToken
         );
         LogUsageNative(finalResponse);
+        usage = AddUsage(usage, finalResponse.Usage);
         var finalAnswer = RequireNonEmptyTextNative(finalResponse);
         AppendAssistantAnswer(messages, finalAnswer);
-        return new AgenticCompletionResult(finalAnswer, accessedFiles, generatedFiles);
+        return new AgenticCompletionResult(finalAnswer, accessedFiles, generatedFiles, usage);
+    }
+
+    // Прибавляет usage одного вызова модели к накопителю. Вход = «свежие» токены +
+    // запись кэша; чтение кэша — отдельно (льготная ставка). ProviderCostUsd — из
+    // сырого поля usage.cost, которое добавляет агрегатор (официальный SDK его не
+    // типизирует, но сохраняет в RawData).
+    private static TokenUsage AddUsage(TokenUsage acc, Usage usage) =>
+        acc.Add(
+            usage.InputTokens + (usage.CacheCreationInputTokens ?? 0),
+            usage.CacheReadInputTokens ?? 0,
+            usage.OutputTokens,
+            ReadProviderCostUsd(usage)
+        );
+
+    private static double ReadProviderCostUsd(Usage usage)
+    {
+        if (usage.RawData is { } raw && raw.TryGetValue("cost", out var costElement) && costElement.ValueKind == JsonValueKind.Number)
+        {
+            return costElement.GetDouble();
+        }
+        return 0;
     }
 
     // Человекочитаемый статус для конкретного вызова инструмента — показывается
@@ -758,7 +794,7 @@ public class ChatCompletionService(
 
             if (completion.Value.FinishReason != ChatFinishReason.ToolCalls)
             {
-                return new AgenticCompletionResult(RequireNonEmptyTextLegacy(completion.Value), accessedFiles, []);
+                return new AgenticCompletionResult(RequireNonEmptyTextLegacy(completion.Value), accessedFiles, [], TokenUsage.Empty);
             }
 
             messages.Add(new AssistantChatMessage(completion.Value));
@@ -786,7 +822,7 @@ public class ChatCompletionService(
         // ответ ниже (RequireNonEmptyTextLegacy) обязательна: именно на этом пути и
         // случился реальный инцидент с пустым ответом без единой ошибки.
         var finalCompletion = await chatClient.CompleteChatAsync(messages, cancellationToken: cancellationToken);
-        return new AgenticCompletionResult(RequireNonEmptyTextLegacy(finalCompletion.Value), accessedFiles, []);
+        return new AgenticCompletionResult(RequireNonEmptyTextLegacy(finalCompletion.Value), accessedFiles, [], TokenUsage.Empty);
     }
 
     // Модель иногда возвращает формально успешный ответ (200, без исключений) с

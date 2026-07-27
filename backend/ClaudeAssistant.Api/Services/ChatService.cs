@@ -6,6 +6,7 @@ using ClaudeAssistant.Api.Data;
 using ClaudeAssistant.Api.Dtos;
 using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
+using ClaudeAssistant.Api.Services.AiCompletion;
 using ClaudeAssistant.Api.Services.FileGeneration;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -106,13 +107,17 @@ public class ChatService(
         });
         await db.SaveChangesAsync(cancellationToken);
 
-        var (reply, generatedFiles) = await GenerateAsync(userId, conversation.Id, conversation.Model, messages, cancellationToken);
+        var (reply, generatedFiles, usage) = await GenerateAsync(userId, conversation.Id, conversation.Model, messages, cancellationToken);
 
         db.ChatMessages.Add(new ChatMessage
         {
             ConversationId = conversation.Id,
             IsUser = false,
             Text = reply,
+            InputTokens = (int)usage.InputTokens,
+            CacheReadTokens = (int)usage.CacheReadTokens,
+            OutputTokens = (int)usage.OutputTokens,
+            ProviderCostUsd = usage.ProviderCostUsd,
             CreatedAt = DateTimeOffset.UtcNow,
         });
         conversation.UpdatedAt = DateTimeOffset.UtcNow;
@@ -176,7 +181,7 @@ public class ChatService(
     // на стороне агрегатора и в наш tool-loop не попадает. create_file — КЛИЕНТСКИЙ:
     // модель им «останавливается» (stop_reason=tool_use), мы его выполняем и
     // продолжаем. Поэтому цикл управляется наличием клиентских tool_use в ходе.
-    private async Task<(string Reply, List<GeneratedFileRef> Files)> GenerateAsync(
+    private async Task<(string Reply, List<GeneratedFileRef> Files, TokenUsage Usage)> GenerateAsync(
         Guid userId,
         Guid conversationId,
         string model,
@@ -191,6 +196,7 @@ public class ChatService(
             DocumentGenerationService.BuildCreateFileTool(),
         ];
         var generatedFiles = new List<GeneratedFileRef>();
+        var usage = TokenUsage.Empty;
         var lastText = "";
 
         for (var iteration = 0; iteration < MaxToolIterations; iteration++)
@@ -204,14 +210,15 @@ public class ChatService(
                 Messages = messages,
             };
 
-            var (turnText, toolCalls) = await StreamTurnAsync(client, parameters, userId, conversationId, cancellationToken);
+            var (turnText, toolCalls, turnUsage) = await StreamTurnAsync(client, parameters, userId, conversationId, cancellationToken);
             lastText = turnText;
+            usage = usage.Add(turnUsage.InputTokens, turnUsage.CacheReadTokens, turnUsage.OutputTokens, turnUsage.ProviderCostUsd);
 
             if (toolCalls.Count == 0)
             {
                 // Финальный ход — модель ответила текстом без создания файлов.
                 var text = string.IsNullOrWhiteSpace(turnText) ? "(пустой ответ)" : turnText;
-                return (text, generatedFiles);
+                return (text, generatedFiles, usage);
             }
 
             // Дописываем ход ассистента (текст-преамбула + tool_use) и результаты
@@ -237,14 +244,14 @@ public class ChatService(
         }
 
         // Исчерпан лимит ходов — отдаём последний полученный текст (или заглушку).
-        return (string.IsNullOrWhiteSpace(lastText) ? "(пустой ответ)" : lastText, generatedFiles);
+        return (string.IsNullOrWhiteSpace(lastText) ? "(пустой ответ)" : lastText, generatedFiles, usage);
     }
 
     // Один ход: стримит текст по токенам (SignalR) и накапливает клиентские tool_use
     // (create_file) — их вход собирается из input_json_delta. Возвращает текст хода и
     // разобранные вызовы инструментов. При обрыве стрима после части контента —
     // отдаём накопленное; если не пришло вообще ничего — откат на нестримовый вызов.
-    private async Task<(string Text, List<ChatToolCall> ToolCalls)> StreamTurnAsync(
+    private async Task<(string Text, List<ChatToolCall> ToolCalls, TokenUsage Usage)> StreamTurnAsync(
         AnthropicClient client,
         MessageCreateParams parameters,
         Guid userId,
@@ -256,11 +263,34 @@ public class ChatService(
         var accums = new List<ToolCallAccum>();
         ToolCallAccum? current = null;
 
+        // Usage читаем из сырого JSON событий (типизированные поля SDK не покрывают
+        // добавленный агрегатором `cost`, а часть счётчиков nullable): вход — из
+        // message_start, выход и стоимость — из message_delta (кумулятивные, берём
+        // последние значения).
+        long inputTokens = 0,
+            cacheReadTokens = 0,
+            outputTokens = 0;
+        double costUsd = 0;
+
         try
         {
             await foreach (var streamEvent in client.Messages.CreateStreaming(parameters, cancellationToken))
             {
-                if (streamEvent.TryPickContentBlockStart(out var start))
+                if (streamEvent.TryPickStart(out var msgStart) && TryGetUsageElement(msgStart.RawData, out var startUsage))
+                {
+                    inputTokens = RawNum(startUsage, "input_tokens") + RawNum(startUsage, "cache_creation_input_tokens");
+                    cacheReadTokens = RawNum(startUsage, "cache_read_input_tokens");
+                }
+                else if (streamEvent.TryPickDelta(out var msgDelta) && TryGetUsageElement(msgDelta.RawData, out var deltaUsage))
+                {
+                    outputTokens = RawNum(deltaUsage, "output_tokens");
+                    var c = RawCost(deltaUsage);
+                    if (c > 0)
+                    {
+                        costUsd = c;
+                    }
+                }
+                else if (streamEvent.TryPickContentBlockStart(out var start))
                 {
                     // Начало нового блока: клиентский tool_use (create_file) начинаем
                     // копить; текст и серверные блоки (web_search) — не наши.
@@ -300,7 +330,7 @@ public class ChatService(
             // Стрим оборвался после части контента (редкий upstream api_error в конце) —
             // отдаём накопленное, не роняя запрос.
             logger.LogWarning(ex, "Стрим чата оборвался после части контента — отдаём накопленное");
-            return (sb.ToString(), ParseToolCalls(accums));
+            return (sb.ToString(), ParseToolCalls(accums), new TokenUsage(inputTokens, cacheReadTokens, outputTokens, costUsd));
         }
         catch (Exception ex)
         {
@@ -315,10 +345,50 @@ public class ChatService(
                     .User(userId.ToString())
                     .SendAsync(UpdatesHubEvents.ChatToken, conversationId, text, cancellationToken);
             }
-            return (text, calls);
+            return (text, calls, UsageFromUsageRaw(response.Usage.RawData));
         }
 
-        return (sb.ToString(), ParseToolCalls(accums));
+        return (sb.ToString(), ParseToolCalls(accums), new TokenUsage(inputTokens, cacheReadTokens, outputTokens, costUsd));
+    }
+
+    // Достаёт объект usage из сырого JSON события: напрямую (message_delta) или
+    // вложенным в message (message_start).
+    private static bool TryGetUsageElement(IReadOnlyDictionary<string, JsonElement> eventRaw, out JsonElement usage)
+    {
+        if (eventRaw.TryGetValue("usage", out usage) && usage.ValueKind == JsonValueKind.Object)
+        {
+            return true;
+        }
+        if (
+            eventRaw.TryGetValue("message", out var message)
+            && message.ValueKind == JsonValueKind.Object
+            && message.TryGetProperty("usage", out usage)
+            && usage.ValueKind == JsonValueKind.Object
+        )
+        {
+            return true;
+        }
+        usage = default;
+        return false;
+    }
+
+    private static long RawNum(JsonElement usage, string key) =>
+        usage.TryGetProperty(key, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetInt64() : 0;
+
+    private static double RawCost(JsonElement usage) =>
+        usage.TryGetProperty("cost", out var e) && e.ValueKind == JsonValueKind.Number ? e.GetDouble() : 0;
+
+    // Строит TokenUsage из RawData объекта usage (нестримовый ответ — ключи лежат
+    // прямо в словаре).
+    private static TokenUsage UsageFromUsageRaw(IReadOnlyDictionary<string, JsonElement>? usageRaw)
+    {
+        if (usageRaw is null)
+        {
+            return TokenUsage.Empty;
+        }
+        long N(string key) => usageRaw.TryGetValue(key, out var e) && e.ValueKind == JsonValueKind.Number ? e.GetInt64() : 0;
+        var cost = usageRaw.TryGetValue("cost", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDouble() : 0;
+        return new TokenUsage(N("input_tokens") + N("cache_creation_input_tokens"), N("cache_read_input_tokens"), N("output_tokens"), cost);
     }
 
     private static List<ChatToolCall> ParseToolCalls(List<ToolCallAccum> accums)
