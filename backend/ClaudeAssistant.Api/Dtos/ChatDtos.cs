@@ -10,4 +10,4 @@ public record ChatSendResponse(Guid ConversationId, string Title, string Reply, 
 
 public record ChatConversationDto(Guid Id, string Title, DateTimeOffset UpdatedAt);
 
-public record ChatMessageDto(bool IsUser, string Text, DateTimeOffset CreatedAt);
+public record ChatMessageDto(bool IsUser, string Text, DateTimeOffset CreatedAt, IReadOnlyList<GeneratedFileDto> GeneratedFiles);

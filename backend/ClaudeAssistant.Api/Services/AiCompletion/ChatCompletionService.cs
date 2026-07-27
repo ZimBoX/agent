@@ -27,7 +27,7 @@ public record struct TokenUsage(long InputTokens, long CacheReadTokens, long Out
 // GeneratedFiles — файлы, созданные моделью через инструмент create_file на этом
 // ходу (docx/xlsx), которые клиент предложит скачать. Пусто, если модель файлов не
 // делала. Usage — токены/стоимость за этот ход.
-public record AgenticCompletionResult(string ResultText, List<string> AccessedFiles, List<GeneratedFileRef> GeneratedFiles, TokenUsage Usage);
+public record AgenticCompletionResult(string ResultText, List<string> AccessedFiles, List<GeneratedFileData> GeneratedFiles, TokenUsage Usage);
 
 // Диалог не найден или истёк (окно кэша, 1 час). Контроллер отвечает 410 —
 // продолжать нельзя, контекст уже выпал из кэша.
@@ -47,7 +47,6 @@ public class ChatCompletionService(
     SandboxedFileAccessService fileAccess,
     ConversationStore conversationStore,
     DocumentGenerationService documentGeneration,
-    GeneratedFileStore generatedFileStore,
     ILogger<ChatCompletionService> logger
 )
 {
@@ -244,7 +243,7 @@ public class ChatCompletionService(
         }
 
         var accessedFiles = new List<string>();
-        var generatedFiles = new List<GeneratedFileRef>();
+        var generatedFiles = new List<GeneratedFileData>();
         var usage = TokenUsage.Empty;
         var totalDocumentChars = 0;
         var totalToolImages = 0;
@@ -447,7 +446,7 @@ public class ChatCompletionService(
         string? sandboxRoot,
         Guid userId,
         List<string> accessedFiles,
-        List<GeneratedFileRef> generatedFiles,
+        List<GeneratedFileData> generatedFiles,
         int totalDocumentCharsSoFar,
         int totalToolImagesSoFar
     )
@@ -626,13 +625,12 @@ public class ChatCompletionService(
     // регистрирует ссылку (её вернёт AgenticCompletionResult). Модели возвращаем
     // короткое подтверждение (без байтов). Ошибку генерации отдаём текстом —
     // модель сможет поправить входные данные и попробовать снова.
-    private List<Block> GenerateFileResultNative(ToolUseBlock toolUse, Guid userId, List<GeneratedFileRef> generatedFiles)
+    private List<Block> GenerateFileResultNative(ToolUseBlock toolUse, Guid userId, List<GeneratedFileData> generatedFiles)
     {
         try
         {
             var (bytes, fileName, contentType) = documentGeneration.Generate(toolUse.Input);
-            var reference = generatedFileStore.Save(userId, fileName, contentType, bytes);
-            generatedFiles.Add(reference);
+            generatedFiles.Add(new GeneratedFileData(Guid.NewGuid(), fileName, contentType, bytes));
             return TextResultNative($"Файл «{fileName}» успешно создан и приложен к ответу. Кратко подтверди это пользователю.");
         }
         catch (Exception ex)

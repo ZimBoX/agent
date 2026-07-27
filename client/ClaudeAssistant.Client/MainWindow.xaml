@@ -270,7 +270,7 @@
                                             <ItemsControl ItemsSource="{x:Bind Files}" Visibility="{x:Bind FilesVisibility}">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate x:DataType="services:GeneratedFile">
-                                                        <Button Click="OnDownloadFileClick" Margin="0,4,0,0" HorizontalAlignment="Left"
+                                                        <Button Click="OnDownloadFileClick" IsEnabled="{x:Bind Available}" Margin="0,4,0,0" HorizontalAlignment="Left"
                                                                 Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
                                                                 BorderThickness="1" CornerRadius="10" Padding="12,8"
                                                                 ToolTipService.ToolTip="Скачать файл">
@@ -278,7 +278,7 @@
                                                                 <Path Data="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"
                                                                       Stroke="{StaticResource AppAccentBrush}" StrokeThickness="2" StrokeLineJoin="Round"
                                                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="16" Height="16" Stretch="Uniform" />
-                                                                <TextBlock Text="{x:Bind FileName}" VerticalAlignment="Center" FontSize="13"
+                                                                <TextBlock Text="{x:Bind Label}" VerticalAlignment="Center" FontSize="13"
                                                                            FontWeight="SemiBold" Foreground="{StaticResource AppTextPrimaryBrush}" />
                                                             </StackPanel>
                                                         </Button>

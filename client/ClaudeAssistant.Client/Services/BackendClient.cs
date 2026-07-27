@@ -16,12 +16,18 @@ public record HistoryEntry(
     string? ResultText,
     string? ErrorMessage,
     DateTimeOffset CreatedAt,
-    string? AccessedFiles
+    string? AccessedFiles,
+    IReadOnlyList<GeneratedFile>? GeneratedFiles = null
 );
 
 // Файл, сгенерированный моделью (create_file): Id — скачать через
 // GET /api/files/{id}, FileName — с расширением (как показать/сохранить).
-public record GeneratedFile(Guid Id, string FileName);
+// Available=false — байты зачищены по сроку хранения (30 дней): в истории
+// показываем имя с пометкой «файл удалён», без кнопки скачивания.
+public record GeneratedFile(Guid Id, string FileName, bool Available = true)
+{
+    public string Label => Available ? FileName : $"{FileName} — файл удалён";
+}
 
 // ConversationId — если не null, ответ можно продолжить (ContinueAsync) в
 // пределах окна кэша (1 час). null — продолжение недоступно.
@@ -34,7 +40,7 @@ public record MeInfo(string? FullName, string? Role);
 
 public record ChatConversationInfo(Guid Id, string Title, DateTimeOffset UpdatedAt);
 
-public record ChatMessageInfo(bool IsUser, string Text, DateTimeOffset CreatedAt);
+public record ChatMessageInfo(bool IsUser, string Text, DateTimeOffset CreatedAt, IReadOnlyList<GeneratedFile>? GeneratedFiles = null);
 
 public record ChatSendResult(bool Success, Guid ConversationId, string? Title, string? Reply, string? ErrorMessage, IReadOnlyList<GeneratedFile>? Files = null);
 

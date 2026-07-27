@@ -4,6 +4,7 @@ using ClaudeAssistant.Api.Dtos;
 using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
 using ClaudeAssistant.Api.Services.AiCompletion;
+using ClaudeAssistant.Api.Services.FileGeneration;
 using ClaudeAssistant.Api.Services.FileTextExtraction;
 using ClaudeAssistant.Api.Services.ProjectFiles;
 using Microsoft.AspNetCore.Authorization;
@@ -46,6 +47,39 @@ public class RequestsController(
     private const string CompanyContextPreamble =
         "Контекст: наша компания всегда выступает подрядчиком или субподрядчиком по обсуждаемым документам (договорам, сметам, техническим заданиям и т.п.) — и никогда заказчиком. Там, где сторона документа влияет на анализ (риски, обязательства, ответственность, интересы), рассматривай его именно с этой стороны; отдельный разбор с точки зрения заказчика не нужен.\n\n";
 
+    // Сохраняет сгенерированные моделью файлы в БД (байты + привязка к записи истории
+    // или сообщению чата) и возвращает их метаданные для ответа. Файлы живут 30 дней
+    // (см. GeneratedFileCleanupService), потом Content зачищается.
+    private async Task<List<GeneratedFileDto>> PersistGeneratedFilesAsync(
+        IReadOnlyList<GeneratedFileData> files,
+        Guid userId,
+        Guid? historyEntryId,
+        Guid? chatMessageId
+    )
+    {
+        if (files.Count == 0)
+        {
+            return [];
+        }
+        foreach (var f in files)
+        {
+            db.GeneratedFiles.Add(new GeneratedFileRecord
+            {
+                Id = f.Id,
+                UserId = userId,
+                FileName = f.FileName,
+                ContentType = f.ContentType,
+                Content = f.Bytes,
+                SizeBytes = f.Bytes.Length,
+                CreatedAt = DateTimeOffset.UtcNow,
+                RequestHistoryEntryId = historyEntryId,
+                ChatMessageId = chatMessageId,
+            });
+        }
+        await db.SaveChangesAsync();
+        return files.Select(f => new GeneratedFileDto(f.Id, f.FileName, true)).ToList();
+    }
+
     [HttpGet("history")]
     public async Task<ActionResult<List<HistoryEntryResponse>>> History()
     {
@@ -63,7 +97,12 @@ public class RequestsController(
                 r.ResultText,
                 r.ErrorMessage,
                 r.CreatedAt,
-                r.AccessedFiles
+                r.AccessedFiles,
+                db.GeneratedFiles
+                    .Where(f => f.RequestHistoryEntryId == r.Id)
+                    .OrderBy(f => f.CreatedAt)
+                    .Select(f => new GeneratedFileDto(f.Id, f.FileName, f.Content != null))
+                    .ToList()
             ))
             .Take(50)
             .ToListAsync();
@@ -237,7 +276,7 @@ public class RequestsController(
                 }
             }
 
-            var generatedFiles = agenticResult.GeneratedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName)).ToList();
+            var generatedFiles = await PersistGeneratedFilesAsync(agenticResult.GeneratedFiles, userId, historyEntry.Id, chatMessageId: null);
             return Ok(new ExecuteResponse(resultText, accessedFiles, conversationId, generatedFiles.Count > 0 ? generatedFiles : null));
         }
         // Осознанные, понятные пользователю ошибки (например, пустой ответ модели
@@ -363,7 +402,9 @@ public class RequestsController(
                 }
             }
 
-            var generatedFiles = result.GeneratedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName)).ToList();
+            // Файлы продолжения привязываем к той же записи истории, что и исходный запрос.
+            var linkedEntryId = conversationStore.Get(conversationId)?.HistoryEntryId;
+            var generatedFiles = await PersistGeneratedFilesAsync(result.GeneratedFiles, userId, linkedEntryId, chatMessageId: null);
             return Ok(new ContinueResponse(result.ResultText, accessedFiles, generatedFiles.Count > 0 ? generatedFiles : null));
         }
         catch (ConversationNotFoundException)

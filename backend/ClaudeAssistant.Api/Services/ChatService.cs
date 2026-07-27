@@ -23,7 +23,6 @@ public class ChatService(
     AppDbContext db,
     IHubContext<UpdatesHub> hub,
     DocumentGenerationService documentGeneration,
-    GeneratedFileStore generatedFileStore,
     ILogger<ChatService> logger
 )
 {
@@ -116,8 +115,9 @@ public class ChatService(
             usage.ProviderCostUsd
         );
 
-        db.ChatMessages.Add(new ChatMessage
+        var assistantMessage = new ChatMessage
         {
+            Id = Guid.NewGuid(),
             ConversationId = conversation.Id,
             IsUser = false,
             Text = reply,
@@ -126,14 +126,31 @@ public class ChatService(
             OutputTokens = (int)usage.OutputTokens,
             ProviderCostUsd = usage.ProviderCostUsd,
             CreatedAt = DateTimeOffset.UtcNow,
-        });
+        };
+        db.ChatMessages.Add(assistantMessage);
+
+        // Сгенерированные файлы сохраняем в БД с привязкой к этому ответу — чтобы их
+        // можно было скачать из истории чата (30 дней, потом Content зачищается).
+        foreach (var f in generatedFiles)
+        {
+            db.GeneratedFiles.Add(new GeneratedFileRecord
+            {
+                Id = f.Id,
+                UserId = userId,
+                FileName = f.FileName,
+                ContentType = f.ContentType,
+                Content = f.Bytes,
+                SizeBytes = f.Bytes.Length,
+                CreatedAt = DateTimeOffset.UtcNow,
+                ChatMessageId = assistantMessage.Id,
+            });
+        }
+
         conversation.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
 
-        // Сгенерированные файлы эфемерны (TTL 1 час, не в БД) — отдаём их только в
-        // этом ответе; при перечитывании истории кнопок скачивания уже не будет.
         var files = generatedFiles.Count > 0
-            ? generatedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName)).ToList()
+            ? generatedFiles.Select(f => new GeneratedFileDto(f.Id, f.FileName, true)).ToList()
             : null;
         return new ChatSendResponse(conversation.Id, conversation.Title, reply, files);
     }
@@ -188,7 +205,7 @@ public class ChatService(
     // на стороне агрегатора и в наш tool-loop не попадает. create_file — КЛИЕНТСКИЙ:
     // модель им «останавливается» (stop_reason=tool_use), мы его выполняем и
     // продолжаем. Поэтому цикл управляется наличием клиентских tool_use в ходе.
-    private async Task<(string Reply, List<GeneratedFileRef> Files, TokenUsage Usage)> GenerateAsync(
+    private async Task<(string Reply, List<GeneratedFileData> Files, TokenUsage Usage)> GenerateAsync(
         Guid userId,
         Guid conversationId,
         string model,
@@ -202,7 +219,7 @@ public class ChatService(
             new WebSearchTool20250305 { MaxUses = MaxWebSearchUses },
             DocumentGenerationService.BuildCreateFileTool(),
         ];
-        var generatedFiles = new List<GeneratedFileRef>();
+        var generatedFiles = new List<GeneratedFileData>();
         var usage = TokenUsage.Empty;
         var lastText = "";
 
@@ -239,7 +256,7 @@ public class ChatService(
             foreach (var call in toolCalls)
             {
                 assistantContent.Add(new ToolUseBlockParam { ID = call.Id, Name = call.Name, Input = call.Input });
-                var resultText = ExecuteCreateFile(call, userId, generatedFiles);
+                var resultText = ExecuteCreateFile(call, generatedFiles);
                 toolResults.Add(new ToolResultBlockParam
                 {
                     ToolUseID = call.Id,
@@ -453,8 +470,9 @@ public class ChatService(
     }
 
     // Выполняет create_file: генерирует файл, кладёт в эфемерное хранилище,
-    // регистрирует ссылку. Модели возвращаем короткое подтверждение или текст ошибки.
-    private string ExecuteCreateFile(ChatToolCall call, Guid userId, List<GeneratedFileRef> generatedFiles)
+    // Возвращает модели короткое подтверждение или текст ошибки. Байты несём вверх
+    // в generatedFiles — сохранит их SendAsync с привязкой к сообщению чата.
+    private string ExecuteCreateFile(ChatToolCall call, List<GeneratedFileData> generatedFiles)
     {
         if (call.Name != "create_file")
         {
@@ -463,8 +481,7 @@ public class ChatService(
         try
         {
             var (bytes, fileName, contentType) = documentGeneration.Generate(call.Input);
-            var reference = generatedFileStore.Save(userId, fileName, contentType, bytes);
-            generatedFiles.Add(reference);
+            generatedFiles.Add(new GeneratedFileData(Guid.NewGuid(), fileName, contentType, bytes));
             return $"Файл «{fileName}» успешно создан и приложен к ответу. Кратко подтверди это пользователю.";
         }
         catch (Exception ex)
@@ -539,7 +556,16 @@ public class ChatService(
         return await db.ChatMessages
             .Where(m => m.ConversationId == conversationId)
             .OrderBy(m => m.CreatedAt)
-            .Select(m => new ChatMessageDto(m.IsUser, m.Text, m.CreatedAt))
+            .Select(m => new ChatMessageDto(
+                m.IsUser,
+                m.Text,
+                m.CreatedAt,
+                db.GeneratedFiles
+                    .Where(f => f.ChatMessageId == m.Id)
+                    .OrderBy(f => f.CreatedAt)
+                    .Select(f => new GeneratedFileDto(f.Id, f.FileName, f.Content != null))
+                    .ToList()
+            ))
             .ToListAsync(cancellationToken);
     }
 }

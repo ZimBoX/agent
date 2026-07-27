@@ -105,9 +105,10 @@ builder.Services.AddSingleton<ConversationStore>();
 // Генерация файлов моделью (create_file): сервис без состояния (Singleton) +
 // эфемерное хранилище результатов в памяти (Singleton, TTL 1 час).
 builder.Services.AddSingleton<ClaudeAssistant.Api.Services.FileGeneration.DocumentGenerationService>();
-builder.Services.AddSingleton<ClaudeAssistant.Api.Services.FileGeneration.GeneratedFileStore>();
 // Расчёт стоимости запросов в рублях по токенам (статистика в админке).
 builder.Services.AddSingleton<ClaudeAssistant.Api.Services.Pricing.PricingService>();
+// Фоновая зачистка сгенерированных файлов старше 30 дней.
+builder.Services.AddHostedService<ClaudeAssistant.Api.Services.FileGeneration.GeneratedFileCleanupService>();
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddCascadingAuthenticationState();

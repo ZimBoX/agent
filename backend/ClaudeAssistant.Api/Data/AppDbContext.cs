@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<ChatConversation> ChatConversations => Set<ChatConversation>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<GeneratedFileRecord> GeneratedFiles => Set<GeneratedFileRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -69,6 +70,26 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .HasOne(m => m.Conversation)
             .WithMany(c => c.Messages)
             .HasForeignKey(m => m.ConversationId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Файл привязан к записи истории ИЛИ к сообщению чата; при удалении родителя
+        // (в т.ч. каскадно при удалении пользователя/диалога) удаляется и файл.
+        modelBuilder.Entity<GeneratedFileRecord>()
+            .HasOne(f => f.User)
+            .WithMany()
+            .HasForeignKey(f => f.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<GeneratedFileRecord>()
+            .HasOne(f => f.RequestHistoryEntry)
+            .WithMany()
+            .HasForeignKey(f => f.RequestHistoryEntryId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<GeneratedFileRecord>()
+            .HasOne(f => f.ChatMessage)
+            .WithMany()
+            .HasForeignKey(f => f.ChatMessageId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

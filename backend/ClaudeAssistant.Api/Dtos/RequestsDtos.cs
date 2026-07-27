@@ -2,7 +2,9 @@ namespace ClaudeAssistant.Api.Dtos;
 
 // Файл, созданный моделью (create_file) и предлагаемый к скачиванию: Id — для
 // GET /api/files/{id}, FileName — с расширением (как показать/сохранить).
-public record GeneratedFileDto(Guid Id, string FileName);
+// Available=false — байты уже зачищены по сроку хранения (30 дней), в истории
+// показываем имя с пометкой «файл удалён», без кнопки скачивания.
+public record GeneratedFileDto(Guid Id, string FileName, bool Available = true);
 
 // ConversationId — если не null, диалог можно продолжить (POST
 // /api/requests/{conversationId}/continue) в течение окна кэша (1 час). null —

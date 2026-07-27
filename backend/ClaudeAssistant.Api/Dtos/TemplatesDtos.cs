@@ -11,5 +11,6 @@ public record HistoryEntryResponse(
     string? ResultText,
     string? ErrorMessage,
     DateTimeOffset CreatedAt,
-    string? AccessedFiles
+    string? AccessedFiles,
+    IReadOnlyList<GeneratedFileDto> GeneratedFiles
 );

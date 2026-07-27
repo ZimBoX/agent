@@ -154,6 +154,49 @@ namespace ClaudeAssistant.Api.Migrations
                     b.ToTable("EnrollmentCodes");
                 });
 
+            modelBuilder.Entity("ClaudeAssistant.Api.Models.GeneratedFileRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ChatMessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("Content")
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("RequestHistoryEntryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("SizeBytes")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChatMessageId");
+
+                    b.HasIndex("RequestHistoryEntryId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("GeneratedFiles");
+                });
+
             modelBuilder.Entity("ClaudeAssistant.Api.Models.RequestHistoryEntry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -345,6 +388,31 @@ namespace ClaudeAssistant.Api.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("ClaudeAssistant.Api.Models.GeneratedFileRecord", b =>
+                {
+                    b.HasOne("ClaudeAssistant.Api.Models.ChatMessage", "ChatMessage")
+                        .WithMany()
+                        .HasForeignKey("ChatMessageId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("ClaudeAssistant.Api.Models.RequestHistoryEntry", "RequestHistoryEntry")
+                        .WithMany()
+                        .HasForeignKey("RequestHistoryEntryId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("ClaudeAssistant.Api.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ChatMessage");
+
+                    b.Navigation("RequestHistoryEntry");
 
                     b.Navigation("User");
                 });

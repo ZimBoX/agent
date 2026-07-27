@@ -567,7 +567,7 @@ public partial class MainWindow : Window
     // исходный ответ + пары «вопрос/ответ» продолжений. Сервер склеивает их в
     // ResultText маркером "\n\n---\n\n**Вопрос:** …" (см. RequestsController.Continue).
     // Продолжить нельзя (диалог уже вне кэша сервера) — поле follow-up скрыто.
-    private void RestoreHistoryThread(string resultText)
+    private void RestoreHistoryThread(string resultText, IReadOnlyList<Services.GeneratedFile>? files)
     {
         _thread.Clear();
         _pending = null;
@@ -580,9 +580,12 @@ public partial class MainWindow : Window
         const string separator = "\n\n---\n\n**Вопрос:** ";
         var parts = resultText.Split(separator);
 
-        // Первый фрагмент — исходный ответ (у него нет пользовательского вопроса,
-        // как и у первого сообщения в живом треде).
-        _thread.Add(new ChatMessage(isUser: false, parts[0]));
+        var bubbles = new List<ChatMessage>
+        {
+            // Первый фрагмент — исходный ответ (у него нет пользовательского вопроса,
+            // как и у первого сообщения в живом треде).
+            new(isUser: false, parts[0]),
+        };
 
         for (var i = 1; i < parts.Length; i++)
         {
@@ -591,11 +594,27 @@ public partial class MainWindow : Window
             var split = chunk.IndexOf("\n\n", StringComparison.Ordinal);
             var question = (split >= 0 ? chunk[..split] : chunk).Trim();
             var answer = split >= 0 ? chunk[(split + 2)..] : string.Empty;
-            _thread.Add(new ChatMessage(isUser: true, question));
+            bubbles.Add(new ChatMessage(isUser: true, question));
             if (answer.Length > 0)
             {
-                _thread.Add(new ChatMessage(isUser: false, answer));
+                bubbles.Add(new ChatMessage(isUser: false, answer));
             }
+        }
+
+        // Сгенерированные файлы записи (кнопки скачивания) вешаем на последний ответ
+        // модели — точную привязку к конкретному ходу история не хранит.
+        if (files is { Count: > 0 })
+        {
+            var lastAnswer = bubbles.FindLastIndex(b => !b.IsUser);
+            if (lastAnswer >= 0)
+            {
+                bubbles[lastAnswer] = new ChatMessage(isUser: false, bubbles[lastAnswer].Text, files: files);
+            }
+        }
+
+        foreach (var bubble in bubbles)
+        {
+            _thread.Add(bubble);
         }
 
         ScrollThreadToBottom();
@@ -875,7 +894,7 @@ public partial class MainWindow : Window
             {
                 foreach (var m in messages)
                 {
-                    _thread.Add(new ChatMessage(isUser: m.IsUser, m.Text));
+                    _thread.Add(new ChatMessage(isUser: m.IsUser, m.Text, files: m.GeneratedFiles));
                 }
                 ScrollThreadToBottom();
             }
@@ -1139,7 +1158,7 @@ public partial class MainWindow : Window
         // в пределах окна кэша) — показываем сохранённый диалог без поля follow-up,
         // восстанавливая вопросы/ответы отдельными пузырями.
         var text = item.Entry.ResultText ?? item.Entry.ErrorMessage ?? string.Empty;
-        RestoreHistoryThread(text);
+        RestoreHistoryThread(text, item.Entry.GeneratedFiles);
         StatusText.Text = string.IsNullOrEmpty(item.Entry.AccessedFiles)
             ? $"Из истории: {item.Entry.CreatedAt.LocalDateTime:dd.MM.yyyy HH:mm}"
             : $"Из истории: {item.Entry.CreatedAt.LocalDateTime:dd.MM.yyyy HH:mm} · также просмотрено: {item.Entry.AccessedFiles}";
