@@ -155,7 +155,10 @@ public class ChatCompletionService(
             return (legacy, null);
         }
 
-        var systemBlocks = BuildSystemBlocksNative(systemPrompt);
+        // Блок дисциплины инструментов нужен только когда инструменты реально
+        // подключены (режим поиска по папке). Он сохранится в ConversationState и
+        // будет действовать и на продолжениях диалога.
+        var systemBlocks = BuildSystemBlocksNative(systemPrompt, toolWorkflow: sandboxRoot is not null);
         List<MessageParam> messages = [new() { Role = Role.User, Content = BuildUserContentNative(userText, images) }];
 
         var result = await RunTurnNative(model, systemBlocks, messages, sandboxRoot, userId, status, cancellationToken);
@@ -925,8 +928,27 @@ public class ChatCompletionService(
     // обращение читает его из кэша, а не оплачивает заново. Для режима
     // прикреплённых файлов здесь же лежит и текст документа — значит он тоже
     // кэшируется на весь диалог.
-    private static List<TextBlockParam> BuildSystemBlocksNative(string systemPrompt) =>
-        [new() { Text = systemPrompt, CacheControl = OneHourCache }];
+    private static List<TextBlockParam> BuildSystemBlocksNative(string systemPrompt, bool toolWorkflow) =>
+        // Кэш-маркер только на ПОСЛЕДНЕМ блоке (лимит точек кэша — 4); CacheControl
+        // init-only, поэтому ставим его в инициализаторе, а не постфактум.
+        toolWorkflow
+            ?
+            [
+                new() { Text = systemPrompt },
+                new() { Text = ToolWorkflowDiscipline, CacheControl = OneHourCache },
+            ]
+            : [new() { Text = systemPrompt, CacheControl = OneHourCache }];
+
+    // Дисциплина работы с инструментами по проектной документации. Лечит два
+    // реальных сбоя: (1) модель заканчивала ход планом-нарративом («сейчас проверю
+    // стр. 17-18…») вместо результата и вставала на end_turn; (2) просила
+    // «перечитать» уже виденные листы, потому что картинки из истории удаляются
+    // окном PruneOldImages, а цифры она в текст сразу не переносила.
+    private const string ToolWorkflowDiscipline =
+        "РЕЖИМ РАБОТЫ С ДОКУМЕНТАМИ ЧЕРЕЗ ИНСТРУМЕНТЫ.\n"
+        + "1. Изображения листов (превью и вырезки) АВТОМАТИЧЕСКИ удаляются из истории после следующего шага — на них нельзя сослаться позже. Поэтому, открыв лист, СРАЗУ выписывай в текст все нужные данные (номер листа, наименование работ, единицы измерения, объём/количество). Не откладывай перенос цифр «на потом» и не рассчитывай увидеть тот же лист снова без нового render_page.\n"
+        + "2. НИКОГДА не заканчивай ответ планом, обещанием или отчётом о процессе («сейчас проверю…», «соберу данные…», «уже видел листы…»). Пока сбор не завершён — вызывай инструмент и продолжай. Как только данные собраны — выдай ИТОГОВЫЙ полный результат (сводную ведомость/таблицу объёмов) целиком.\n"
+        + "3. Твоё финальное сообщение — это конечный результат для пользователя, а не заметки о ходе работы. Если тебе кажется, что надо ещё что-то проверить — проверь это вызовом инструмента ПРЯМО СЕЙЧАС, а не завершай ход обещанием.";
 
     private static List<ContentBlockParam> BuildUserContentNative(string text, IReadOnlyList<byte[]>? images)
     {
