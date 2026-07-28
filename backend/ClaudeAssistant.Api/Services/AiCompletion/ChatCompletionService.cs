@@ -658,7 +658,7 @@ public class ChatCompletionService(
                     overviewBlocks.AddRange(
                         montages.Select(m => (Block)new ImageBlockParam
                         {
-                            Source = new Base64ImageSource { MediaType = "image/jpeg", Data = Convert.ToBase64String(m) },
+                            Source = new Base64ImageSource { MediaType = DrawingRenderService.DetectMediaType(m), Data = Convert.ToBase64String(m) },
                         })
                     );
                     return (overviewBlocks, 0, montages.Count);
@@ -689,7 +689,7 @@ public class ChatCompletionService(
                         new List<Block>
                         {
                             new TextBlockParam { Text = label },
-                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = "image/jpeg", Data = Convert.ToBase64String(png) } },
+                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = DrawingRenderService.DetectMediaType(png), Data = Convert.ToBase64String(png) } },
                         },
                         0,
                         1

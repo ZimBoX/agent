@@ -98,9 +98,6 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
             UseTiling = true,
             BackgroundColor = SKColors.White,
             WithAnnotations = true,
-            // Чертежи — штриховка/текст, цвет не нужен для чтения таблиц: серый +
-            // JPEG сжимают в разы, иначе картинки в истории пробивают лимит входа 8МБ.
-            Grayscale = true,
         };
         using var bitmap = RenderBitmap(pdfPath, pageIndex, options);
         return EncodeJpeg(bitmap, 82);
@@ -160,7 +157,6 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
                         WithAspectRatio = true,
                         UseTiling = true,
                         BackgroundColor = SKColors.White,
-                        Grayscale = true,
                     }
                 );
                 var thumbX = cellX + (ThumbCellWidth - thumb.Width) / 2;
@@ -175,8 +171,8 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
         }
 
         using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Jpeg, 72);
-        return data.ToArray();
+        using var montageBitmap = SKBitmap.FromImage(image);
+        return EncodeJpeg(montageBitmap, 72);
     }
 
     // Поиск по текстовому слою PDF: возвращает (номер листа, фрагмент) для листов,
@@ -225,10 +221,33 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
         return (start > 0 ? "…" : "") + snippet + (end < text.Length ? "…" : "");
     }
 
+    // Кодирует в JPEG. JPEG-энкодер SkiaSharp не поддерживает часть цветовых типов
+    // (Gray8, некоторые alpha) — молча падает в PNG-фолбэк, из-за чего Anthropic ругался
+    // «jpeg media type, but image appears to be png». Поэтому предварительно
+    // перерисовываем в стандартный непрозрачный RGBA. Media type всё равно определяем
+    // по реальным байтам (DetectMediaType) — на случай, если JPEG-энкодера в сборке нет.
     private static byte[] EncodeJpeg(SKBitmap bitmap, int quality)
     {
-        using var image = SKImage.FromBitmap(bitmap);
+        var info = new SKImageInfo(bitmap.Width, bitmap.Height, SKColorType.Rgba8888, SKAlphaType.Opaque);
+        using var normalized = new SKBitmap(info);
+        using (var canvas = new SKCanvas(normalized))
+        {
+            canvas.Clear(SKColors.White);
+            canvas.DrawBitmap(bitmap, 0, 0);
+        }
+        using var image = SKImage.FromBitmap(normalized);
         using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
-        return data.ToArray();
+        if (data is not null)
+        {
+            return data.ToArray();
+        }
+        // JPEG-энкодер недоступен — отдаём PNG (media type определится по байтам).
+        using var png = image.Encode();
+        return png.ToArray();
     }
+
+    // Тип картинки по «магическим» байтам — чтобы пометить ImageBlockParam верно,
+    // независимо от того, что реально закодировал SkiaSharp.
+    public static string DetectMediaType(byte[] image) =>
+        image.Length >= 3 && image[0] == 0xFF && image[1] == 0xD8 && image[2] == 0xFF ? "image/jpeg" : "image/png";
 }
