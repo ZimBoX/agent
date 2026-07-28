@@ -98,9 +98,12 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
             UseTiling = true,
             BackgroundColor = SKColors.White,
             WithAnnotations = true,
+            // Чертежи — штриховка/текст, цвет не нужен для чтения таблиц: серый +
+            // JPEG сжимают в разы, иначе картинки в истории пробивают лимит входа 8МБ.
+            Grayscale = true,
         };
         using var bitmap = RenderBitmap(pdfPath, pageIndex, options);
-        return EncodePng(bitmap);
+        return EncodeJpeg(bitmap, 82);
     }
 
     // Монтаж превью всех страниц (несколько картинок, если листов много) с подписью
@@ -157,6 +160,7 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
                         WithAspectRatio = true,
                         UseTiling = true,
                         BackgroundColor = SKColors.White,
+                        Grayscale = true,
                     }
                 );
                 var thumbX = cellX + (ThumbCellWidth - thumb.Width) / 2;
@@ -171,7 +175,7 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
         }
 
         using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Png, 85);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, 72);
         return data.ToArray();
     }
 
@@ -221,10 +225,10 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
         return (start > 0 ? "…" : "") + snippet + (end < text.Length ? "…" : "");
     }
 
-    private static byte[] EncodePng(SKBitmap bitmap)
+    private static byte[] EncodeJpeg(SKBitmap bitmap, int quality)
     {
         using var image = SKImage.FromBitmap(bitmap);
-        using var data = image.Encode(SKEncodedImageFormat.Png, 90);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
         return data.ToArray();
     }
 }

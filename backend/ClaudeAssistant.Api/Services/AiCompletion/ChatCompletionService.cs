@@ -79,6 +79,12 @@ public class ChatCompletionService(
     // нет) — картинки тяжелее текста, поэтому бюджет отдельный и куда скромнее.
     private const int MaxTotalToolImages = 50;
 
+    // Сколько последних сообщений сохраняют картинки в запросе к модели. Картинки
+    // (превью/вырезки чертежей) тяжёлые и накапливаются в истории — если слать их все,
+    // запрос пробивает лимит входа агрегатора (8 МБ). Из более старых сообщений
+    // картинки вырезаются (модель к тому моменту уже перенесла нужные цифры в текст).
+    private const int KeepImageWindowMessages = 4;
+
     // Максимум обращений к web_search за один вызов модели (серверный инструмент
     // Anthropic сам себя ограничивает этим числом). Каждый поиск стоит денег
     // (~2 ₽ на этом агрегаторе), поэтому лимит скромный — модель обычно и так
@@ -270,7 +276,10 @@ public class ChatCompletionService(
                     // записываются в кэш и переиспользуются и внутри tool-loop'а, и
                     // на follow-up'ах. Сами messages храним без пометок, чтобы точки
                     // кэша не накапливались сверх лимита (4).
-                    Messages = WithCacheOnLastBlock(messages),
+                    // PruneOldImages выбрасывает картинки из старых сообщений, чтобы
+                    // история не пробила лимит входа агрегатора (8 МБ) — превью/вырезки
+                    // чертежей тяжёлые, а модель к этому моменту уже сняла с них цифры.
+                    Messages = WithCacheOnLastBlock(PruneOldImages(messages, KeepImageWindowMessages)),
                 },
                 cancellationToken
             );
@@ -281,6 +290,7 @@ public class ChatCompletionService(
             {
                 var answer = RequireNonEmptyTextNative(response);
                 AppendAssistantAnswer(messages, answer);
+                StripAllStoredImages(messages);
                 return new AgenticCompletionResult(answer, accessedFiles, generatedFiles, usage);
             }
 
@@ -328,7 +338,7 @@ public class ChatCompletionService(
                 Model = model,
                 MaxTokens = MaxOutputTokens,
                 System = systemBlocks,
-                Messages = WithCacheOnLastBlock(messages),
+                Messages = WithCacheOnLastBlock(PruneOldImages(messages, KeepImageWindowMessages)),
             },
             cancellationToken
         );
@@ -336,6 +346,7 @@ public class ChatCompletionService(
         usage = AddUsage(usage, finalResponse.Usage);
         var finalAnswer = RequireNonEmptyTextNative(finalResponse);
         AppendAssistantAnswer(messages, finalAnswer);
+        StripAllStoredImages(messages);
         return new AgenticCompletionResult(finalAnswer, accessedFiles, generatedFiles, usage);
     }
 
@@ -416,6 +427,73 @@ public class ChatCompletionService(
         var copy = new List<MessageParam>(messages);
         copy[^1] = new MessageParam { Role = last.Role, Content = newBlocks };
         return copy;
+    }
+
+    // Возвращает копию messages, где картинки убраны из всех сообщений, кроме
+    // последних keepLastMessages: результат-инструмента с картинками заменяется на
+    // текст-заглушку с тем же ToolUseID (связка tool_use↔tool_result сохраняется).
+    // Так история не пробивает лимит входа агрегатора (8 МБ на запрос).
+    private static List<MessageParam> PruneOldImages(List<MessageParam> messages, int keepLastMessages)
+    {
+        var threshold = messages.Count - keepLastMessages;
+        if (threshold <= 0)
+        {
+            return messages;
+        }
+
+        var result = new List<MessageParam>(messages.Count);
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (i >= threshold || !messages[i].Content.TryPickContentBlockParams(out var blocks) || blocks is null)
+            {
+                result.Add(messages[i]);
+                continue;
+            }
+
+            var changed = false;
+            var newBlocks = new List<ContentBlockParam>(blocks.Count);
+            foreach (var block in blocks)
+            {
+                if (
+                    block.TryPickToolResult(out ToolResultBlockParam? tr)
+                    && tr.Content.TryPickBlocks(out var inner)
+                    && inner is not null
+                    && inner.Any(b => b.TryPickImageBlockParam(out _))
+                )
+                {
+                    changed = true;
+                    newBlocks.Add(
+                        new ToolResultBlockParam
+                        {
+                            ToolUseID = tr.ToolUseID,
+                            Content = new List<Block>
+                            {
+                                new TextBlockParam { Text = "[изображения этого шага показаны и учтены ранее — при необходимости запроси нужный лист/регион заново]" },
+                            },
+                        }
+                    );
+                }
+                else
+                {
+                    newBlocks.Add(block);
+                }
+            }
+            result.Add(changed ? new MessageParam { Role = messages[i].Role, Content = newBlocks } : messages[i]);
+        }
+        return result;
+    }
+
+    // Убирает картинки из ВСЕЙ хранимой истории (мутирует список) — вызывается перед
+    // сохранением диалога в ConversationStore, чтобы follow-up'ы не тащили тяжёлые
+    // картинки предыдущих ходов и не упирались в лимит входа.
+    private static void StripAllStoredImages(List<MessageParam> messages)
+    {
+        var lean = PruneOldImages(messages, 0);
+        if (!ReferenceEquals(lean, messages))
+        {
+            messages.Clear();
+            messages.AddRange(lean);
+        }
     }
 
     private static ContentBlockParam CloneWithCache(ContentBlockParam block)
@@ -580,7 +658,7 @@ public class ChatCompletionService(
                     overviewBlocks.AddRange(
                         montages.Select(m => (Block)new ImageBlockParam
                         {
-                            Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(m) },
+                            Source = new Base64ImageSource { MediaType = "image/jpeg", Data = Convert.ToBase64String(m) },
                         })
                     );
                     return (overviewBlocks, 0, montages.Count);
@@ -611,7 +689,7 @@ public class ChatCompletionService(
                         new List<Block>
                         {
                             new TextBlockParam { Text = label },
-                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(png) } },
+                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = "image/jpeg", Data = Convert.ToBase64String(png) } },
                         },
                         0,
                         1
