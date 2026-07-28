@@ -101,6 +101,10 @@ builder.Services.AddScoped<SandboxedFileAccessService>();
 // Рендер PDF-чертежей в картинки для vision + дисковый кэш результатов (без состояния — Singleton).
 builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.RenderCacheService>();
 builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.DrawingRenderService>();
+// Большие пачки вложений раскладываются во временную серверную песочницу и
+// читаются инструментами (по частям + зум) вместо инлайна; фоновый свип чистит их.
+builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.AttachedFilesSandboxService>();
+builder.Services.AddHostedService<ClaudeAssistant.Api.Services.ProjectFiles.AttachedFilesCleanupService>();
 // Продолжаемые диалоги живут в памяти (окно = TTL кэша Anthropic, 1 час) —
 // стор Singleton, чтобы состояние переживало отдельные HTTP-запросы.
 builder.Services.AddMemoryCache();

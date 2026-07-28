@@ -56,6 +56,10 @@ services:
       # Кэш рендеров чертежей (PNG-вырезки/монтажи/постраничный текст) — ускоряет
       # повторное чтение объекта. Лимит размера — см. Render:CacheMaxBytes в коде.
       Render__CacheDir: /app/render-cache
+      # Временная песочница больших пачек вложений: файлы, загруженные пользователем,
+      # раскладываются сюда и читаются моделью инструментами (по частям + зум) вместо
+      # инлайна. Свежие чистятся фоновым свипом (см. AttachedFilesCleanupService).
+      AttachedFiles__CacheDir: /app/attached-cache
     ports:
       - "5149:5149"
     volumes:
@@ -64,6 +68,9 @@ services:
       - releases_data:/app/releases
       # Кэш рендеров чертежей — переживает пересоздание контейнера.
       - render_cache:/app/render-cache
+      # Временная песочница вложений (эфемерна, чистится свипом; том — чтобы диск
+      # контейнера не пух и переживать пересоздание в пределах ретеншена).
+      - attached_cache:/app/attached-cache
       # Файловые логи Serilog (LocalApplicationData у root внутри контейнера).
       - backend_logs:/root/.local/share/ClaudeAssistant/backend-logs
       # Шара с папками объектов (смонтирована на хосте, см. deploy/README раздел 6),
@@ -74,4 +81,5 @@ volumes:
   postgres_data:
   releases_data:
   render_cache:
+  attached_cache:
   backend_logs:

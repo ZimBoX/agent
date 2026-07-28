@@ -22,6 +22,7 @@ public class RequestsController(
     MultiFileExtractionService extractionService,
     ChatCompletionService chatCompletionService,
     SandboxedFileAccessService fileAccess,
+    AttachedFilesSandboxService attachedSandbox,
     ConversationStore conversationStore,
     IHubContext<UpdatesHub> hub,
     ILogger<RequestsController> logger
@@ -184,13 +185,42 @@ public class RequestsController(
         var useFileSearch = sandboxRoot is not null;
         var fileNames = string.Join(", ", files.Select(f => f.FileName));
 
+        // Большая пачка ВЛОЖЕННЫХ файлов (не папка объекта): не встраиваем их
+        // содержимое в промпт (инлайн раздул бы запрос сверх лимита входа модели),
+        // а раскладываем во временную песочницу на сервере и даём модели те же
+        // инструменты, что и для папки объекта — чтение по частям (read_document с
+        // offset) и зум (render_page с вырезкой региона). Небольшие пачки читаются
+        // по-старому инлайном — быстрее (один ход, без tool-loop'а).
+        var attachedToolMode = !useFileSearch && files.Count > 0 && files.Sum(f => f.Length) > attachedSandbox.InlineMaxBytes;
+
         string combinedText;
         IReadOnlyList<byte[]> images = [];
+        var userTask = "Выполни задачу, описанную в системном промпте, и верни результат.";
         if (files.Count == 0 && useFileSearch)
         {
             // Поиск по объекту не требует ручного прикрепления файлов — это и есть
             // весь смысл: модель сама найдёт и прочитает нужное внутри папки объекта.
             combinedText = "";
+        }
+        else if (attachedToolMode)
+        {
+            try
+            {
+                MultiFileExtractionService.ValidateLimits(files);
+            }
+            catch (FileValidationException ex)
+            {
+                return BadRequest(new ErrorResponse(ex.Message));
+            }
+
+            sandboxRoot = await attachedSandbox.MaterializeAsync(files, userId, HttpContext.RequestAborted);
+            useFileSearch = true;
+            combinedText = "(Приложенные файлы не встроены в этот запрос из-за их объёма — они доступны для чтения инструментами, см. задачу.)";
+            userTask =
+                "К запросу приложены файлы — они НЕ встроены в промпт из-за объёма, а доступны через инструменты: "
+                + "list_files покажет их список; read_document читает текст по частям (offset для следующей порции); "
+                + "render_page рендерит страницу PDF или её вырезку с увеличением (region); document_overview/search_document — обзор и поиск по PDF. "
+                + $"Файлы: {fileNames}. Прочитай нужное этими инструментами и выполни задачу из системного промпта.";
         }
         else
         {
@@ -235,7 +265,7 @@ public class RequestsController(
             var (agenticResult, conversationId) = await chatCompletionService.StartConversationAsync(
                 model,
                 systemPrompt,
-                "Выполни задачу, описанную в системном промпте, и верни результат.",
+                userTask,
                 useFileSearch ? sandboxRoot! : null,
                 userId,
                 images,
@@ -343,20 +373,42 @@ public class RequestsController(
 
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-        // Файлы, прикреплённые к follow-up: извлекаем текст/изображения так же, как в execute.
+        // Файлы, прикреплённые к follow-up. Если диалог уже читает вложения
+        // инструментами (песочница вложений) — дописываем новые файлы туда же, чтобы
+        // модель прочла их теми же инструментами (по частям + зум), а не встраивала
+        // инлайн. Иначе — извлекаем текст/изображения так же, как в execute.
+        var followupState = conversationStore.Get(conversationId);
         string? combinedFileText = null;
         IReadOnlyList<byte[]> images = [];
         if (files.Count > 0)
         {
-            try
+            if (followupState?.SandboxRoot is { } followupSandbox && attachedSandbox.IsAttachedSandbox(followupSandbox))
             {
-                var extraction = await extractionService.ExtractAndCombineAsync(files);
-                combinedFileText = extraction.CombinedText;
-                images = extraction.Images;
+                try
+                {
+                    MultiFileExtractionService.ValidateLimits(files);
+                }
+                catch (FileValidationException ex)
+                {
+                    return BadRequest(new ErrorResponse(ex.Message));
+                }
+
+                await attachedSandbox.AddToAsync(followupSandbox, files, HttpContext.RequestAborted);
+                combinedFileText =
+                    $"К диалогу приложены новые файлы, доступные через инструменты (list_files/read_document/render_page): {string.Join(", ", files.Select(f => f.FileName))}. Прочитай их при необходимости.";
             }
-            catch (FileValidationException ex)
+            else
             {
-                return BadRequest(new ErrorResponse(ex.Message));
+                try
+                {
+                    var extraction = await extractionService.ExtractAndCombineAsync(files);
+                    combinedFileText = extraction.CombinedText;
+                    images = extraction.Images;
+                }
+                catch (FileValidationException ex)
+                {
+                    return BadRequest(new ErrorResponse(ex.Message));
+                }
             }
         }
 

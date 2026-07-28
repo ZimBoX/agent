@@ -40,7 +40,9 @@ public class MultiFileExtractionService(FileTextExtractor extractor)
         return new CombinedExtraction(sb.ToString(), images);
     }
 
-    private static void ValidateLimits(IReadOnlyList<IFormFile> files)
+    // Публичный — используется и tool-режимом больших вложений, который валидирует
+    // пачку теми же правилами, но содержимое не извлекает (см. RequestsController).
+    public static void ValidateLimits(IReadOnlyList<IFormFile> files)
     {
         if (files.Count == 0)
         {
