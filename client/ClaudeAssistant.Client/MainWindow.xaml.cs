@@ -121,6 +121,28 @@ public partial class MainWindow : Window
     // статус приходящими по SignalR событиями.
     private bool _requestInFlight;
 
+    // Отмена текущего запроса кнопкой «Прервать». Один источник на приложение —
+    // одновременно активен только один запрос (остальной ввод заблокирован на время
+    // обработки). _cancelledByUser отличает прерывание пользователем от ошибки/успеха,
+    // чтобы не показывать «Прервано» как ошибку.
+    private CancellationTokenSource? _inFlightCts;
+    private bool _cancelledByUser;
+
+    // Пользователь нажал «Прервать»: помечаем и отменяем токен. HTTP-вызов оборвётся,
+    // сервер получит RequestAborted и остановит модельный вызов (см. RequestsController).
+    private void CancelInFlight()
+    {
+        _cancelledByUser = true;
+        _inFlightCts?.Cancel();
+        StatusText.Text = "Прерываю…";
+    }
+
+    private void OnExecuteStopClick(object sender, RoutedEventArgs e) => CancelInFlight();
+
+    private void OnFollowUpStopClick(object sender, RoutedEventArgs e) => CancelInFlight();
+
+    private void OnChatStopClick(object sender, RoutedEventArgs e) => CancelInFlight();
+
     // Диалог, который можно продолжить (получен из ответа execute). null —
     // продолжение недоступно (legacy-путь модели, просмотр из истории, или сессия
     // истекла). _lastAnswerText — текст последнего ответа модели для Копировать/Сохранить.
@@ -465,7 +487,10 @@ public partial class MainWindow : Window
             customPrompt = null;
         }
 
-        ExecuteButton.IsEnabled = false;
+        // Кнопку «Выполнить» на время обработки подменяем кнопкой «Прервать».
+        ExecuteButton.Visibility = Visibility.Collapsed;
+        ExecuteStopButton.Visibility = Visibility.Visible;
+        ExecuteStopButton.IsEnabled = true;
         BusyIndicator.IsActive = true;
         StatusText.Text = "Обрабатываем документ(ы)...";
 
@@ -474,6 +499,8 @@ public partial class MainWindow : Window
         // Раньше здесь был таймер "всё ещё обрабатываем" через 15с — теперь его
         // заменил настоящий прогресс.
         _requestInFlight = true;
+        _cancelledByUser = false;
+        _inFlightCts = new CancellationTokenSource();
 
         // Пока идёт запрос, автообновление не применяется (см. UpdateService) —
         // никогда не рвём работу пользователя посреди обработки.
@@ -481,16 +508,25 @@ public partial class MainWindow : Window
         ExecuteResult result;
         try
         {
-            result = await _backendClient.ExecuteAsync(templateId, customPrompt, selectedPaths, objectFolder);
+            result = await _backendClient.ExecuteAsync(templateId, customPrompt, selectedPaths, objectFolder, _inFlightCts.Token);
         }
         finally
         {
             AppState.IsBusy = false;
             _requestInFlight = false;
+            _inFlightCts.Dispose();
+            _inFlightCts = null;
+            BusyIndicator.IsActive = false;
+            ExecuteStopButton.Visibility = Visibility.Collapsed;
+            ExecuteButton.Visibility = Visibility.Visible;
+            ExecuteButton.IsEnabled = true;
         }
 
-        BusyIndicator.IsActive = false;
-        ExecuteButton.IsEnabled = true;
+        if (_cancelledByUser)
+        {
+            StatusText.Text = "Прервано";
+            return;
+        }
 
         if (!result.Success)
         {
@@ -667,27 +703,44 @@ public partial class MainWindow : Window
         // строка статуса в расширенном виде не видна).
         AddPendingBubble();
 
-        FollowUpSend.IsEnabled = false;
+        FollowUpSend.Visibility = Visibility.Collapsed;
+        FollowUpStop.Visibility = Visibility.Visible;
+        FollowUpStop.IsEnabled = true;
         FollowUpBox.IsEnabled = false;
         BusyIndicator.IsActive = true;
         StatusText.Text = "Обрабатываем...";
         AppState.IsBusy = true;
         _requestInFlight = true;
+        _cancelledByUser = false;
+        _inFlightCts = new CancellationTokenSource();
 
         ContinueResult result;
         try
         {
-            result = await _backendClient.ContinueAsync(conversationId, text, attachments);
+            result = await _backendClient.ContinueAsync(conversationId, text, attachments, _inFlightCts.Token);
         }
         finally
         {
             AppState.IsBusy = false;
             _requestInFlight = false;
+            _inFlightCts.Dispose();
+            _inFlightCts = null;
             BusyIndicator.IsActive = false;
+            FollowUpStop.Visibility = Visibility.Collapsed;
+            FollowUpSend.Visibility = Visibility.Visible;
         }
 
         // Запрос завершён (любым исходом) — убираем пузырь "печатает…".
         RemovePendingBubble();
+
+        if (_cancelledByUser)
+        {
+            FollowUpSend.IsEnabled = true;
+            FollowUpBox.IsEnabled = true;
+            StatusText.Text = "Прервано";
+            FollowUpBox.Focus(FocusState.Programmatic);
+            return;
+        }
 
         if (result.Expired)
         {
@@ -923,7 +976,9 @@ public partial class MainWindow : Window
         var attachments = _chatAttachments.ToList();
 
         _chatSending = true;
-        ChatSendButton.IsEnabled = false;
+        ChatSendButton.Visibility = Visibility.Collapsed;
+        ChatStopButton.Visibility = Visibility.Visible;
+        ChatStopButton.IsEnabled = true;
         ChatInputBox.Text = string.Empty;
         _chatAttachments.Clear();
         UpdateAttachmentsText(ChatAttachmentsText, _chatAttachments);
@@ -934,9 +989,30 @@ public partial class MainWindow : Window
         _thread.Add(_pending);
         ScrollThreadToBottom();
 
-        var result = await _backendClient.SendChatAsync(_chatConversationId, text, attachments);
+        _cancelledByUser = false;
+        _inFlightCts = new CancellationTokenSource();
+        ChatSendResult result;
+        try
+        {
+            result = await _backendClient.SendChatAsync(_chatConversationId, text, attachments, _inFlightCts.Token);
+        }
+        finally
+        {
+            _inFlightCts.Dispose();
+            _inFlightCts = null;
+            ChatStopButton.Visibility = Visibility.Collapsed;
+            ChatSendButton.Visibility = Visibility.Visible;
+        }
 
         RemovePendingBubble();
+
+        if (_cancelledByUser)
+        {
+            _chatSending = false;
+            ChatSendButton.IsEnabled = true;
+            ChatInputBox.Focus(FocusState.Programmatic);
+            return;
+        }
 
         if (!result.Success)
         {

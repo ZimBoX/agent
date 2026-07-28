@@ -162,7 +162,7 @@ public class BackendClient
     // абсолютный путь к папке (папка прикреплённого файла или папка, из которой
     // запустили клиент через Проводник — см. MainWindow.GetCurrentObjectRoot),
     // внутри которой модель сама сможет искать и читать файлы.
-    public async Task<ExecuteResult> ExecuteAsync(Guid? templateId, string? customPrompt, IReadOnlyList<string> filePaths, string? objectFolder = null)
+    public async Task<ExecuteResult> ExecuteAsync(Guid? templateId, string? customPrompt, IReadOnlyList<string> filePaths, string? objectFolder = null, CancellationToken cancellationToken = default)
     {
         AttachAuth();
 
@@ -191,7 +191,7 @@ public class BackendClient
                 content.Add(fileContent, "files", Path.GetFileName(path));
             }
 
-            var response = await _http.PostAsync("/api/requests/execute", content);
+            var response = await _http.PostAsync("/api/requests/execute", content, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var errorText = await response.Content.ReadAsStringAsync();
@@ -204,6 +204,12 @@ public class BackendClient
         catch (HttpRequestException ex)
         {
             return new ExecuteResult(false, null, $"Сервер недоступен: {ex.Message}");
+        }
+        // Пользователь нажал «Прервать» — наш токен отменён. Отличаем от таймаута
+        // HttpClient (тот тоже TaskCanceledException, но наш токен НЕ отменён).
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new ExecuteResult(false, null, "Прервано пользователем");
         }
         catch (TaskCanceledException)
         {
@@ -223,7 +229,7 @@ public class BackendClient
 
     // Продолжает диалог по conversationId (получен из ExecuteAsync). В пределах
     // окна кэша (1 час) — иначе backend отвечает 410 и Expired=true.
-    public async Task<ContinueResult> ContinueAsync(Guid conversationId, string message, IReadOnlyList<string> filePaths)
+    public async Task<ContinueResult> ContinueAsync(Guid conversationId, string message, IReadOnlyList<string> filePaths, CancellationToken cancellationToken = default)
     {
         AttachAuth();
 
@@ -238,7 +244,7 @@ public class BackendClient
                 content.Add(new StreamContent(stream), "files", Path.GetFileName(path));
             }
 
-            var response = await _http.PostAsync($"/api/requests/{conversationId}/continue", content);
+            var response = await _http.PostAsync($"/api/requests/{conversationId}/continue", content, cancellationToken);
             if (response.StatusCode == System.Net.HttpStatusCode.Gone)
             {
                 return new ContinueResult(false, null, "Сессия истекла — начните новый запрос", Expired: true);
@@ -255,6 +261,10 @@ public class BackendClient
         catch (HttpRequestException ex)
         {
             return new ContinueResult(false, null, $"Сервер недоступен: {ex.Message}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new ContinueResult(false, null, "Прервано пользователем");
         }
         catch (TaskCanceledException)
         {
@@ -295,7 +305,7 @@ public class BackendClient
 
     // Ответ приходит целиком по завершении (авторитетный текст); токены по мере
     // генерации — отдельно по SignalR (RealtimeService.ChatToken).
-    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text, IReadOnlyList<string> filePaths)
+    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text, IReadOnlyList<string> filePaths, CancellationToken cancellationToken = default)
     {
         AttachAuth();
 
@@ -315,7 +325,7 @@ public class BackendClient
                 content.Add(new StreamContent(stream), "files", Path.GetFileName(path));
             }
 
-            var response = await _http.PostAsync("/api/chat/send", content);
+            var response = await _http.PostAsync("/api/chat/send", content, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
                 var errorText = await response.Content.ReadAsStringAsync();
@@ -327,6 +337,10 @@ public class BackendClient
         catch (HttpRequestException ex)
         {
             return new ChatSendResult(false, Guid.Empty, null, null, $"Сервер недоступен: {ex.Message}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new ChatSendResult(false, Guid.Empty, null, null, "Прервано пользователем");
         }
         catch (TaskCanceledException)
         {

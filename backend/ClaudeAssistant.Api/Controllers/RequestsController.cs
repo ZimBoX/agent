@@ -136,7 +136,12 @@ public class RequestsController(
         [FromForm] Guid? templateId,
         [FromForm] string? customPrompt,
         [FromForm] string? objectFolder,
-        List<IFormFile> files
+        List<IFormFile> files,
+        // ASP.NET привязывает CancellationToken к HttpContext.RequestAborted: когда
+        // пользователь жмёт «Прервать», клиент обрывает HTTP-запрос → токен
+        // отменяется → модельный вызов останавливается (не молотит вхолостую и не
+        // тратит деньги на брошенный запрос).
+        CancellationToken cancellationToken
     )
     {
         Template? template = null;
@@ -269,7 +274,8 @@ public class RequestsController(
                 useFileSearch ? sandboxRoot! : null,
                 userId,
                 images,
-                BuildStatusReporter(userId)
+                BuildStatusReporter(userId),
+                cancellationToken
             );
             var resultText = agenticResult.ResultText;
             var accessedFiles = agenticResult.AccessedFiles.Count > 0 ? string.Join(", ", agenticResult.AccessedFiles) : null;
@@ -308,6 +314,14 @@ public class RequestsController(
 
             var generatedFiles = await PersistGeneratedFilesAsync(agenticResult.GeneratedFiles, userId, historyEntry.Id, chatMessageId: null);
             return Ok(new ExecuteResponse(resultText, accessedFiles, conversationId, generatedFiles.Count > 0 ? generatedFiles : null));
+        }
+        // Пользователь прервал запрос (клиент оборвал соединение → RequestAborted).
+        // Соединения уже нет, тело ответа читать некому — не пишем «неудачу» в
+        // историю и не шумим в логах на уровне ошибки.
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Запрос прерван пользователем (шаблон {TemplateId})", templateId);
+            return StatusCode(499);
         }
         // Осознанные, понятные пользователю ошибки (например, пустой ответ модели
         // из-за слишком большого объёма данных объекта — см.
@@ -364,7 +378,12 @@ public class RequestsController(
     // истёк/не найден: продолжать нельзя, контекст выпал из кэша.
     [HttpPost("{conversationId:guid}/continue")]
     [RequestSizeLimit(FileUploadLimits.MaxTotalSizeBytes)]
-    public async Task<ActionResult<ContinueResponse>> Continue(Guid conversationId, [FromForm] string? message, List<IFormFile> files)
+    public async Task<ActionResult<ContinueResponse>> Continue(
+        Guid conversationId,
+        [FromForm] string? message,
+        List<IFormFile> files,
+        CancellationToken cancellationToken
+    )
     {
         if (string.IsNullOrWhiteSpace(message) && files.Count == 0)
         {
@@ -422,7 +441,8 @@ public class RequestsController(
                 userId,
                 images: images,
                 combinedFileText: combinedFileText,
-                status: BuildStatusReporter(userId)
+                status: BuildStatusReporter(userId),
+                cancellationToken: cancellationToken
             );
             var accessedFiles = result.AccessedFiles.Count > 0 ? string.Join(", ", result.AccessedFiles) : null;
 
@@ -458,6 +478,11 @@ public class RequestsController(
             var linkedEntryId = conversationStore.Get(conversationId)?.HistoryEntryId;
             var generatedFiles = await PersistGeneratedFilesAsync(result.GeneratedFiles, userId, linkedEntryId, chatMessageId: null);
             return Ok(new ContinueResponse(result.ResultText, accessedFiles, generatedFiles.Count > 0 ? generatedFiles : null));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Продолжение диалога прервано пользователем ({ConversationId})", conversationId);
+            return StatusCode(499);
         }
         catch (ConversationNotFoundException)
         {
