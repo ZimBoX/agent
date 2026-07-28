@@ -29,7 +29,9 @@ public partial class DocumentGenerationService
                 "Создаёт файл и прикрепляет его к ответу для скачивания пользователем. "
                 + "Используй, когда пользователь просит СДЕЛАТЬ/СФОРМИРОВАТЬ файл: таблицу (Excel) или документ (Word). "
                 + "Для таблицы укажи format=\"xlsx\" и заполни sheets (первая строка каждого листа — заголовки столбцов). "
-                + "Для документа укажи format=\"docx\" и передай содержимое в markdown (заголовки #/##/###, списки \"- \", таблицы через | ... |, **жирный**). "
+                + "Для документа укажи format=\"docx\" и передай содержимое в markdown: заголовки #/##/### (станут стилями Word), "
+                + "маркированные списки \"- \" и нумерованные \"1. \" (в т.ч. вложенные — отступ 2 пробела на уровень), таблицы через | ... |, "
+                + "**жирный**, *курсив*. Структурируй документ как деловой: заголовок, разделы, списки, таблицы. "
                 + "После создания файла кратко подтверди пользователю, что файл готов и приложен — не вставляй его содержимое в текст ответа целиком.",
             InputSchema = new()
             {
@@ -178,6 +180,16 @@ public partial class DocumentGenerationService
     }
 
     // ===== Word =====
+    // Типографика делового документа: шрифт по умолчанию Times New Roman 12,
+    // заголовки — НАСТОЯЩИМИ стилями Word (Heading1-3, видны в области навигации),
+    // списки — настоящей нумерацией (маркированные/нумерованные, до 3 уровней),
+    // абзацы выключены по ширине, аккуратные таблицы с шапкой. Важно: read_document
+    // извлекает из исходных файлов только ТЕКСТ (без разметки), поэтому «скопировать»
+    // оформление конкретного оригинала невозможно — генерируем опрятный документ
+    // по структуре markdown, который передала модель.
+
+    private const string BodyFont = "Times New Roman";
+    private const string BodySizeHalfPoints = "24"; // 12pt (sz — половинки пункта)
 
     private static byte[] GenerateDocx(IReadOnlyDictionary<string, JsonElement> input, string baseName)
     {
@@ -188,17 +200,114 @@ public partial class DocumentGenerationService
         {
             var mainPart = doc.AddMainDocumentPart();
             mainPart.Document = new Document();
+            AddStyles(mainPart);
+            AddNumbering(mainPart);
             var body = mainPart.Document.AppendChild(new Body());
 
             AppendMarkdown(body, markdown);
 
             if (!body.HasChildren)
             {
-                body.AppendChild(new Paragraph(new Run(new Text(baseName))));
+                body.AppendChild(BodyParagraph(baseName));
             }
+
+            // Поля и размер страницы (A4) — sectPr должен быть последним в body.
+            body.AppendChild(
+                new SectionProperties(
+                    new PageSize { Width = 11906, Height = 16838 },
+                    new PageMargin { Top = 1134, Bottom = 1134, Left = 1418, Right = 850, Header = 708, Footer = 708, Gutter = 0 }
+                )
+            );
             mainPart.Document.Save();
         }
         return ms.ToArray();
+    }
+
+    // Стили документа: docDefaults (шрифт/интервал) + Normal + Heading1-3.
+    private static void AddStyles(MainDocumentPart mainPart)
+    {
+        var part = mainPart.AddNewPart<StyleDefinitionsPart>();
+        var styles = new Styles(
+            new DocDefaults(
+                new RunPropertiesDefault(
+                    new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = BodyFont, HighAnsi = BodyFont, ComplexScript = BodyFont },
+                        new FontSize { Val = BodySizeHalfPoints },
+                        new FontSizeComplexScript { Val = BodySizeHalfPoints }
+                    )
+                ),
+                new ParagraphPropertiesDefault(
+                    new ParagraphPropertiesBaseStyle(
+                        new SpacingBetweenLines { After = "160", Line = "276", LineRule = LineSpacingRuleValues.Auto }
+                    )
+                )
+            ),
+            new Style(new StyleName { Val = "Normal" }) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true },
+            HeadingStyle("Heading1", "heading 1", "34", "1F3864", 0),
+            HeadingStyle("Heading2", "heading 2", "28", "2F5496", 1),
+            HeadingStyle("Heading3", "heading 3", "26", "2F5496", 2)
+        );
+        part.Styles = styles;
+    }
+
+    private static Style HeadingStyle(string id, string name, string sizeHalfPoints, string colorHex, int outlineLevel) =>
+        new(
+            new StyleName { Val = name },
+            new BasedOn { Val = "Normal" },
+            new NextParagraphStyle { Val = "Normal" },
+            new StyleParagraphProperties(
+                new KeepNext(),
+                new SpacingBetweenLines { Before = "240", After = "80", Line = "276", LineRule = LineSpacingRuleValues.Auto },
+                new OutlineLevel { Val = outlineLevel }
+            ),
+            new StyleRunProperties(
+                new Bold(),
+                new Color { Val = colorHex },
+                new FontSize { Val = sizeHalfPoints },
+                new FontSizeComplexScript { Val = sizeHalfPoints }
+            )
+        )
+        {
+            Type = StyleValues.Paragraph,
+            StyleId = id,
+        };
+
+    // Определения нумерации: numId=1 — маркированный список, numId=2 — нумерованный;
+    // по 3 уровня вложенности у каждого.
+    private static void AddNumbering(MainDocumentPart mainPart)
+    {
+        var part = mainPart.AddNewPart<NumberingDefinitionsPart>();
+        part.Numbering = new Numbering(
+            BuildAbstractNum(0, bullet: true),
+            BuildAbstractNum(1, bullet: false),
+            new NumberingInstance(new AbstractNumId { Val = 0 }) { NumberID = 1 },
+            new NumberingInstance(new AbstractNumId { Val = 1 }) { NumberID = 2 }
+        );
+    }
+
+    private static AbstractNum BuildAbstractNum(int id, bool bullet)
+    {
+        var abstractNum = new AbstractNum(new MultiLevelType { Val = MultiLevelValues.HybridMultilevel }) { AbstractNumberId = id };
+        for (var lvl = 0; lvl < 3; lvl++)
+        {
+            var left = 720 * (lvl + 1);
+            var level = new Level(
+                new StartNumberingValue { Val = 1 },
+                new NumberingFormat { Val = bullet ? NumberFormatValues.Bullet : NumberFormatValues.Decimal },
+                new LevelText { Val = bullet ? "" : $"%{lvl + 1}." },
+                new LevelJustification { Val = LevelJustificationValues.Left },
+                new PreviousParagraphProperties(new Indentation { Left = left.ToString(), Hanging = "360" })
+            )
+            {
+                LevelIndex = lvl,
+            };
+            if (bullet)
+            {
+                level.Append(new NumberingSymbolRunProperties(new RunFonts { Ascii = "Symbol", HighAnsi = "Symbol" }));
+            }
+            abstractNum.Append(level);
+        }
+        return abstractNum;
     }
 
     // Минимальный markdown → docx: заголовки (#/##/###), маркированные списки
@@ -233,21 +342,28 @@ public partial class DocumentGenerationService
                 continue;
             }
 
-            if (trimmed.StartsWith("### "))
+            // Уровень вложенности списка — по ведущим пробелам (2 пробела = уровень).
+            var indentLevel = Math.Min(2, (line.Length - trimmed.Length) / 2);
+
+            if (trimmed.StartsWith("#### ") || trimmed.StartsWith("### "))
             {
-                body.AppendChild(HeadingParagraph(trimmed[4..], 24));
+                body.AppendChild(HeadingParagraph(StripPrefix(trimmed), "Heading3"));
             }
             else if (trimmed.StartsWith("## "))
             {
-                body.AppendChild(HeadingParagraph(trimmed[3..], 28));
+                body.AppendChild(HeadingParagraph(trimmed[3..], "Heading2"));
             }
             else if (trimmed.StartsWith("# "))
             {
-                body.AppendChild(HeadingParagraph(trimmed[2..], 32));
+                body.AppendChild(HeadingParagraph(trimmed[2..], "Heading1"));
             }
             else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
             {
-                body.AppendChild(BulletParagraph(trimmed[2..]));
+                body.AppendChild(ListParagraph(trimmed[2..], numberingId: 1, indentLevel));
+            }
+            else if (NumberedItem().Match(trimmed) is { Success: true } numbered)
+            {
+                body.AppendChild(ListParagraph(numbered.Groups["t"].Value, numberingId: 2, indentLevel));
             }
             else
             {
@@ -256,63 +372,94 @@ public partial class DocumentGenerationService
         }
     }
 
-    private static Paragraph HeadingParagraph(string text, int halfPointSize)
+    private static string StripPrefix(string headingLine)
     {
-        var p = new Paragraph();
-        foreach (var run in InlineRuns(text, forceBold: true, halfPointSize))
+        var hashEnd = headingLine.IndexOf(' ');
+        return hashEnd < 0 ? headingLine : headingLine[(hashEnd + 1)..];
+    }
+
+    private static Paragraph HeadingParagraph(string text, string styleId)
+    {
+        var p = new Paragraph(new ParagraphProperties(new ParagraphStyleId { Val = styleId }));
+        foreach (var run in InlineRuns(text))
         {
             p.AppendChild(run);
         }
-        p.ParagraphProperties = new ParagraphProperties(new SpacingBetweenLines { Before = "160", After = "80" });
         return p;
     }
 
-    private static Paragraph BulletParagraph(string text)
+    private static Paragraph ListParagraph(string text, int numberingId, int level)
     {
-        var p = new Paragraph();
-        p.AppendChild(new Run(new Text("• ") { Space = SpaceProcessingModeValues.Preserve }));
-        foreach (var run in InlineRuns(text, forceBold: false, null))
+        var p = new Paragraph(
+            new ParagraphProperties(
+                new NumberingProperties(new NumberingLevelReference { Val = level }, new NumberingId { Val = numberingId }),
+                new Justification { Val = JustificationValues.Both }
+            )
+        );
+        foreach (var run in InlineRuns(text))
         {
             p.AppendChild(run);
         }
-        p.ParagraphProperties = new ParagraphProperties(new Indentation { Left = "360" });
         return p;
     }
 
     private static Paragraph BodyParagraph(string text)
     {
-        var p = new Paragraph();
-        foreach (var run in InlineRuns(text, forceBold: false, null))
+        var p = new Paragraph(new ParagraphProperties(new Justification { Val = JustificationValues.Both }));
+        foreach (var run in InlineRuns(text))
         {
             p.AppendChild(run);
         }
         return p;
     }
 
-    // Разбивает строку на runs по **жирным** участкам.
-    private static IEnumerable<Run> InlineRuns(string text, bool forceBold, int? halfPointSize)
+    // Разбивает строку на runs по инлайновой разметке: ***жирный курсив***,
+    // **жирный**, *курсив*. forceBold — сделать весь текст жирным (шапка таблицы).
+    private static IEnumerable<Run> InlineRuns(string text, bool forceBold = false)
     {
-        foreach (Match m in BoldSegments().Matches(text))
+        foreach (Match m in InlineSegments().Matches(text))
         {
-            var isBold = forceBold || m.Groups["b"].Success;
-            var content = m.Groups["b"].Success ? m.Groups["b"].Value : m.Value;
+            bool bold = forceBold,
+                italic = false;
+            string content;
+            if (m.Groups["bi"].Success)
+            {
+                content = m.Groups["bi"].Value;
+                bold = true;
+                italic = true;
+            }
+            else if (m.Groups["b"].Success)
+            {
+                content = m.Groups["b"].Value;
+                bold = true;
+            }
+            else if (m.Groups["i"].Success)
+            {
+                content = m.Groups["i"].Value;
+                italic = true;
+            }
+            else
+            {
+                content = m.Value;
+            }
+
             if (content.Length == 0)
             {
                 continue;
             }
 
             var run = new Run();
-            var props = new RunProperties();
-            if (isBold)
+            if (bold || italic)
             {
-                props.AppendChild(new Bold());
-            }
-            if (halfPointSize is { } sz)
-            {
-                props.AppendChild(new FontSize { Val = sz.ToString() });
-            }
-            if (props.HasChildren)
-            {
+                var props = new RunProperties();
+                if (bold)
+                {
+                    props.AppendChild(new Bold());
+                }
+                if (italic)
+                {
+                    props.AppendChild(new Italic());
+                }
                 run.AppendChild(props);
             }
             run.AppendChild(new Text(content) { Space = SpaceProcessingModeValues.Preserve });
@@ -334,19 +481,30 @@ public partial class DocumentGenerationService
         }
 
         var table = new Table();
+        // Порядок дочерних элементов в OpenXML строгий: границы top→left→bottom→right→insideH→insideV.
         table.AppendChild(
             new TableProperties(
+                new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct },
                 new TableBorders(
-                    new TopBorder { Val = BorderValues.Single, Size = 4 },
-                    new BottomBorder { Val = BorderValues.Single, Size = 4 },
-                    new LeftBorder { Val = BorderValues.Single, Size = 4 },
-                    new RightBorder { Val = BorderValues.Single, Size = 4 },
-                    new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4 },
-                    new InsideVerticalBorder { Val = BorderValues.Single, Size = 4 }
+                    new TopBorder { Val = BorderValues.Single, Size = 4, Color = "auto" },
+                    new LeftBorder { Val = BorderValues.Single, Size = 4, Color = "auto" },
+                    new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "auto" },
+                    new RightBorder { Val = BorderValues.Single, Size = 4, Color = "auto" },
+                    new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "auto" },
+                    new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "auto" }
                 ),
-                new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct }
+                new TableLook { Val = "04A0" }
             )
         );
+
+        // tblGrid обязателен и должен идти до строк: по колонке на каждый столбец.
+        var columnCount = rows.Max(r => r.Count);
+        var grid = new TableGrid();
+        for (var c = 0; c < columnCount; c++)
+        {
+            grid.AppendChild(new GridColumn());
+        }
+        table.AppendChild(grid);
 
         var isHeader = true;
         foreach (var cells in rows)
@@ -354,17 +512,27 @@ public partial class DocumentGenerationService
             var tr = new TableRow();
             foreach (var cellText in cells)
             {
-                var tc = new TableCell();
-                tc.AppendChild(new TableCellProperties(new TableCellWidth { Type = TableWidthUnitValues.Auto }));
-                var p = new Paragraph();
-                foreach (var run in InlineRuns(cellText, forceBold: isHeader, null))
+                // Порядок в tcPr строгий: tcW → shd → vAlign.
+                var cellProps = new TableCellProperties(new TableCellWidth { Type = TableWidthUnitValues.Auto });
+                // Шапка — жирная на светло-голубой заливке.
+                if (isHeader)
+                {
+                    cellProps.AppendChild(new Shading { Val = ShadingPatternValues.Clear, Color = "auto", Fill = "D9E2F3" });
+                }
+                cellProps.AppendChild(new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center });
+
+                var p = new Paragraph(new ParagraphProperties(new SpacingBetweenLines { After = "0", Line = "240", LineRule = LineSpacingRuleValues.Auto }));
+                foreach (var run in InlineRuns(cellText, forceBold: isHeader))
                 {
                     p.AppendChild(run);
                 }
-                if (!p.HasChildren)
+                if (!p.Elements<Run>().Any())
                 {
                     p.AppendChild(new Run(new Text("")));
                 }
+
+                var tc = new TableCell();
+                tc.AppendChild(cellProps);
                 tc.AppendChild(p);
                 tr.AppendChild(tc);
             }
@@ -406,10 +574,14 @@ public partial class DocumentGenerationService
     [GeneratedRegex(@"[:\\/?*\[\]]")]
     private static partial Regex InvalidSheetChars();
 
-    // Захватывает либо **жирный** сегмент (группа b), либо обычный текст до
-    // следующего **.
-    [GeneratedRegex(@"\*\*(?<b>[^*]+)\*\*|[^*]+|\*")]
-    private static partial Regex BoldSegments();
+    // Инлайновая разметка: ***жирный курсив*** (bi), **жирный** (b), *курсив* (i),
+    // обычный текст, либо одиночная «*».
+    [GeneratedRegex(@"\*\*\*(?<bi>[^*]+)\*\*\*|\*\*(?<b>[^*]+)\*\*|\*(?<i>[^*]+)\*|[^*]+|\*")]
+    private static partial Regex InlineSegments();
+
+    // Пункт нумерованного списка: «1. текст» или «1) текст».
+    [GeneratedRegex(@"^\d+[.)]\s+(?<t>.*)$")]
+    private static partial Regex NumberedItem();
 
     [GeneratedRegex(@"^\|[\s:\-|]+\|?$")]
     private static partial Regex SeparatorRow();

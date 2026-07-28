@@ -122,8 +122,31 @@ public class SandboxedFileAccessService(IConfiguration configuration, FileTextEx
 
         var entries = new List<string>();
         entries.AddRange(Directory.GetDirectories(dir).Select(d => Path.GetFileName(d) + "/"));
-        entries.AddRange(Directory.GetFiles(dir).Select(Path.GetFileName)!);
+        // Рядом с файлом показываем размер — модель по нему прикидывает объём и решает,
+        // что читать (у чтения есть суммарный бюджет, см. ChatCompletionService).
+        entries.AddRange(
+            Directory.GetFiles(dir).Select(f => $"{Path.GetFileName(f)} ({FormatFileSize(new FileInfo(f).Length)})")
+        );
         return entries;
+    }
+
+    // Отрезает хвостовую аннотацию размера вида « (2.3 МБ)», которую добавляет
+    // ListFiles — на случай если модель скопировала её в путь. Строго по формату
+    // ListFiles, чтобы не задеть легитимные имена со скобками.
+    private static string StripSizeAnnotation(string path) =>
+        System.Text.RegularExpressions.Regex.Replace(path.Trim(), @"\s*\(\d[\d\s.,]*(?:Б|КБ|МБ)\)$", "").TrimEnd();
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes < 1024)
+        {
+            return $"{bytes} Б";
+        }
+        if (bytes < 1024 * 1024)
+        {
+            return $"{bytes / 1024.0:0.#} КБ";
+        }
+        return $"{bytes / (1024.0 * 1024):0.#} МБ";
     }
 
     // Возвращает ExtractionResult как есть (текст либо картинки сканов без
@@ -167,6 +190,10 @@ public class SandboxedFileAccessService(IConfiguration configuration, FileTextEx
 
     private string ResolveFile(string sandboxRoot, string relativePath, Guid userId)
     {
+        // list_files показывает файлы с размером в скобках («договор.pdf (2.3 МБ)»);
+        // модель иногда копирует путь целиком — отрезаем аннотацию размера, чтобы
+        // файл всё равно нашёлся.
+        relativePath = StripSizeAnnotation(relativePath);
         var resolved = Resolve(sandboxRoot, relativePath, userId);
         if (!File.Exists(resolved))
         {
