@@ -38,7 +38,9 @@ public class RequestsController(
     // Модель для запросов со своим промптом — шаблону взять её неоткуда, поэтому
     // статичная, как и везде в проекте пока не дошли до агрегирования по задачам
     // (см. PROJECT_PLAN.md, раздел 8.2).
-    private const string CustomPromptModel = "claude-sonnet-5";
+    // Временно на gemini-3-flash-preview для тестов (агрегатор его поддерживает).
+    // Раньше было claude-sonnet-5.
+    private const string CustomPromptModel = "gemini-3-flash-preview";
 
     // Компания в этих запросах всегда выступает подрядчиком или субподрядчиком,
     // никогда заказчиком — держим это явным для модели сразу для всех запросов

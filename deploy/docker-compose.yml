@@ -39,7 +39,7 @@ services:
       Aggregator__UseNativeSdk: "true"
       # Модель «режима чата» (лёгкая, отдельно от основного потока). Меняется без
       # пересборки — просто правкой этой строки и рестартом.
-      Chat__Model: "claude-haiku-4.5"
+      Chat__Model: "gemini-3-flash-preview"
       # Секреты — из .env (обязательны, поднятие упадёт, если не заданы).
       AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:?AITUNNEL_API_KEY не задан в .env}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}

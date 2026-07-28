@@ -58,7 +58,9 @@ public class ChatService(
 
     private record ChatToolCall(string Id, string Name, IReadOnlyDictionary<string, JsonElement> Input);
 
-    private string Model => configuration["Chat:Model"] ?? "claude-haiku-4.5";
+    // Временно gemini-3-flash-preview для тестов (раньше claude-haiku-4.5).
+    // Эффективное значение задаёт Chat__Model в docker-compose — там тоже заменено.
+    private string Model => configuration["Chat:Model"] ?? "gemini-3-flash-preview";
 
     public async Task<ChatSendResponse> SendAsync(
         Guid userId,
