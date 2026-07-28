@@ -53,12 +53,17 @@ services:
       ProjectFiles__UncMappings__0__Local: /mnt/synology/arhiv-gsfs
       ProjectFiles__UncMappings__1__Unc: "\\\\192.168.0.21\\arhiv-gsfs"
       ProjectFiles__UncMappings__1__Local: /mnt/synology/arhiv-gsfs
+      # Кэш рендеров чертежей (PNG-вырезки/монтажи/постраничный текст) — ускоряет
+      # повторное чтение объекта. Лимит размера — см. Render:CacheMaxBytes в коде.
+      Render__CacheDir: /app/render-cache
     ports:
       - "5149:5149"
     volumes:
       # Загруженные через админку билды клиента (release-фид Velopack) должны
       # переживать пересоздание контейнера.
       - releases_data:/app/releases
+      # Кэш рендеров чертежей — переживает пересоздание контейнера.
+      - render_cache:/app/render-cache
       # Файловые логи Serilog (LocalApplicationData у root внутри контейнера).
       - backend_logs:/root/.local/share/ClaudeAssistant/backend-logs
       # Шара с папками объектов (смонтирована на хосте, см. deploy/README раздел 6),
@@ -68,4 +73,5 @@ services:
 volumes:
   postgres_data:
   releases_data:
+  render_cache:
   backend_logs:

@@ -34,3 +34,4 @@ certs/*.cer
 ## Server deployment secrets — never in git
 .env
 deploy/.env
+releases-pinned/

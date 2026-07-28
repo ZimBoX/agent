@@ -188,6 +188,20 @@ public class SandboxedFileAccessService(IConfiguration configuration, FileTextEx
         return resolved;
     }
 
+    // Валидирует, что путь ведёт к существующему .pdf внутри папки объекта, и
+    // возвращает абсолютный путь для рендера/поиска (PDFium/PdfPig читают лениво по
+    // пути — весь файл в память не грузим, поэтому лимита размера здесь нет).
+    public string ResolvePdfForRender(string sandboxRoot, string relativePath, Guid userId)
+    {
+        var path = ResolveFile(sandboxRoot, relativePath, userId);
+        if (Path.GetExtension(path).ToLowerInvariant() != ".pdf")
+        {
+            logger.LogWarning("Рендер запрошен для не-PDF: {Path} (пользователь {UserId})", path, userId);
+            throw new PathAccessDeniedException(relativePath);
+        }
+        return path;
+    }
+
     private string ResolveFile(string sandboxRoot, string relativePath, Guid userId)
     {
         // list_files показывает файлы с размером в скобках («договор.pdf (2.3 МБ)»);

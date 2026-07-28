@@ -17,10 +17,12 @@ RUN dotnet publish backend/ClaudeAssistant.Api/ClaudeAssistant.Api.csproj \
 
 # --- runtime ---
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
-# PDFtoImage (рендер сканов PDF в картинки при извлечении текста) тянет SkiaSharp +
-# PDFium, которым на Linux нужен fontconfig — без него падает при первой обработке PDF.
+# PDFtoImage (рендер PDF в картинки) тянет SkiaSharp + PDFium, которым на Linux нужен
+# fontconfig — без него падает при первой обработке PDF. Плюс fonts-dejavu-core: наши
+# подписи в монтаже листов (DrawingRenderService) рисуются SkiaSharp'ом и содержат
+# кириллицу («Лист N») — без установленного шрифта с кириллицей они выйдут пустыми.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libfontconfig1 \
+    && apt-get install -y --no-install-recommends libfontconfig1 fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

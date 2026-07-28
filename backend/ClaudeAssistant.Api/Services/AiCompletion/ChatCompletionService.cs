@@ -47,6 +47,7 @@ public class ChatCompletionService(
     SandboxedFileAccessService fileAccess,
     ConversationStore conversationStore,
     DocumentGenerationService documentGeneration,
+    DrawingRenderService drawingRender,
     ILogger<ChatCompletionService> logger
 )
 {
@@ -76,7 +77,7 @@ public class ChatCompletionService(
     // Аналогичный суммарный лимит для сканов без текстового слоя, найденных через
     // read_document (не для файлов, прикреплённых вручную — там своего протокола
     // нет) — картинки тяжелее текста, поэтому бюджет отдельный и куда скромнее.
-    private const int MaxTotalToolImages = 30;
+    private const int MaxTotalToolImages = 50;
 
     // Максимум обращений к web_search за один вызов модели (серверный инструмент
     // Anthropic сам себя ограничивает этим числом). Каждый поиск стоит денег
@@ -240,6 +241,9 @@ public class ChatCompletionService(
         {
             tools.Add(BuildListFilesTool());
             tools.Add(BuildReadDocumentTool());
+            tools.Add(BuildSearchDocumentTool());
+            tools.Add(BuildDocumentOverviewTool());
+            tools.Add(BuildRenderPageTool());
         }
 
         var accessedFiles = new List<string>();
@@ -370,6 +374,12 @@ public class ChatCompletionService(
                 return "Просматриваю файлы…";
             case "create_file":
                 return "Готовлю файл…";
+            case "search_document":
+                return "Ищу в документе…";
+            case "document_overview":
+                return "Смотрю листы…";
+            case "render_page":
+                return "Читаю чертёж…";
             default:
                 return "Работаю…";
         }
@@ -526,6 +536,88 @@ public class ChatCompletionService(
                     );
                     return (imageParts, 0, images.Count);
 
+                case "search_document":
+                {
+                    var pdfPath = fileAccess.ResolvePdfForRender(sandboxRoot!, path, userId);
+                    if (!accessedFiles.Contains(path))
+                    {
+                        accessedFiles.Add(path);
+                    }
+                    var query = toolUse.Input.TryGetValue("query", out var queryElement) ? queryElement.GetString() ?? "" : "";
+                    if (!drawingRender.HasTextLayer(pdfPath))
+                    {
+                        return (TextResultNative("У этого PDF нет текстового слоя (это скан). Используй document_overview, чтобы увидеть все листы, и render_page — чтобы прочитать таблицы."), 0, 0);
+                    }
+                    var hits = drawingRender.SearchText(pdfPath, query);
+                    if (hits.Count == 0)
+                    {
+                        return (TextResultNative($"«{query}» не найдено в текстовом слое. Попробуй другой запрос или посмотри листы через document_overview."), 0, 0);
+                    }
+                    var found = "Найдено на листах (открой нужный через render_page):\n" + string.Join("\n", hits.Select(h => $"— лист {h.Page}: {h.Snippet}"));
+                    return (TextResultNative(found), 0, 0);
+                }
+
+                case "document_overview":
+                {
+                    if (totalToolImagesSoFar >= MaxTotalToolImages)
+                    {
+                        return (TextResultNative("Достигнут лимит изображений за запрос — новые листы не рендерятся. Сформулируй ответ по уже увиденному."), 0, 0);
+                    }
+                    var pdfPath = fileAccess.ResolvePdfForRender(sandboxRoot!, path, userId);
+                    if (!accessedFiles.Contains(path))
+                    {
+                        accessedFiles.Add(path);
+                    }
+                    var pageCount = drawingRender.GetPageCount(pdfPath);
+                    var montages = drawingRender.RenderMontages(pdfPath);
+                    var overviewBlocks = new List<Block>
+                    {
+                        new TextBlockParam
+                        {
+                            Text = $"Файл «{Path.GetFileName(pdfPath)}» — {pageCount} лист(ов). Ниже превью всех листов с номерами. Найди листы с нужными таблицами (ведомости объёмов, спецификации) и открой их через render_page — при необходимости с region (вырезкой таблицы) для читаемых цифр.",
+                        },
+                    };
+                    overviewBlocks.AddRange(
+                        montages.Select(m => (Block)new ImageBlockParam
+                        {
+                            Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(m) },
+                        })
+                    );
+                    return (overviewBlocks, 0, montages.Count);
+                }
+
+                case "render_page":
+                {
+                    if (totalToolImagesSoFar >= MaxTotalToolImages)
+                    {
+                        return (TextResultNative("Достигнут лимит изображений за запрос — новые листы не рендерятся."), 0, 0);
+                    }
+                    var pdfPath = fileAccess.ResolvePdfForRender(sandboxRoot!, path, userId);
+                    if (!accessedFiles.Contains(path))
+                    {
+                        accessedFiles.Add(path);
+                    }
+                    var page = 1;
+                    if (toolUse.Input.TryGetValue("page", out var pageElement) && pageElement.ValueKind == JsonValueKind.Number)
+                    {
+                        pageElement.TryGetInt32(out page);
+                    }
+                    var region = TryParseRegion(toolUse.Input);
+                    var png = drawingRender.RenderPage(pdfPath, page, region);
+                    var label = region is { } rg
+                        ? $"Лист {page}, вырезка x={rg.X:0.##} y={rg.Y:0.##} w={rg.Width:0.##} h={rg.Height:0.##} (высокое разрешение):"
+                        : $"Лист {page} целиком (для поиска таблицы; чтобы прочитать мелкие цифры — запроси region с долей листа):";
+                    return (
+                        new List<Block>
+                        {
+                            new TextBlockParam { Text = label },
+                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(png) } },
+                        },
+                        0,
+                        1
+                    );
+                }
+
                 default:
                     return (TextResultNative($"Неизвестный инструмент: {toolUse.Name}"), 0, 0);
             }
@@ -585,6 +677,86 @@ public class ChatCompletionService(
                 Required = ["path"],
             },
         };
+
+    private static Tool BuildSearchDocumentTool() =>
+        new()
+        {
+            Name = "search_document",
+            Description =
+                "Ищет строку в ТЕКСТОВОМ слое PDF и возвращает номера листов + фрагменты — быстрый и бесплатный способ найти нужные листы в текстовых чертежах/документах "
+                + "(например «Ведомость объёмов работ», «Спецификация», единицы «м3», «м2», «т»). У сканов текстового слоя нет — там используй document_overview.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Относительный путь к PDF внутри папки объекта" }),
+                    ["query"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Что искать (подстрока, без учёта регистра)" }),
+                },
+                Required = ["path", "query"],
+            },
+        };
+
+    private static Tool BuildDocumentOverviewTool() =>
+        new()
+        {
+            Name = "document_overview",
+            Description =
+                "Показывает превью ВСЕХ листов PDF сеткой с номерами — используй ПЕРВЫМ для чертежей и сканов: за пару картинок увидишь все листы и найдёшь те, где нужные таблицы "
+                + "(ведомости объёмов работ, спецификации), не читая всё подряд. Дёшево. Затем открывай нужные листы через render_page.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Относительный путь к PDF внутри папки объекта" }),
+                },
+                Required = ["path"],
+            },
+        };
+
+    private static Tool BuildRenderPageTool() =>
+        new()
+        {
+            Name = "render_page",
+            Description =
+                "Рендерит лист PDF (или его РЕГИОН) в картинку для чтения глазами. Для больших/метровых чертежей работай в два шага: сначала посмотри лист целиком (без region), пойми где таблица, "
+                + "потом запроси region — долю листа с таблицей — она отрендерится в высоком разрешении и цифры будут читаемы. НЕ пытайся прочитать мелкий текст со всего метрового листа: "
+                + "при сжатии он теряется, всегда вырезай region вокруг таблицы.",
+            InputSchema = new()
+            {
+                Properties = new Dictionary<string, JsonElement>
+                {
+                    ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Относительный путь к PDF внутри папки объекта" }),
+                    ["page"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "Номер листа, с 1" }),
+                    ["region"] = JsonSerializer.SerializeToElement(
+                        new
+                        {
+                            type = "object",
+                            description = "Необязательно: вырезка листа в долях 0..1, начало отсчёта — верхний-левый угол листа. Без region отдаётся весь лист (для поиска таблицы).",
+                            properties = new
+                            {
+                                x = new { type = "number", description = "левый край вырезки, доля 0..1" },
+                                y = new { type = "number", description = "верхний край вырезки, доля 0..1" },
+                                width = new { type = "number", description = "ширина вырезки, доля 0..1" },
+                                height = new { type = "number", description = "высота вырезки, доля 0..1" },
+                            },
+                        }
+                    ),
+                },
+                Required = ["path", "page"],
+            },
+        };
+
+    // Разбирает region из входа render_page: {x,y,width,height} в долях 0..1.
+    private static PageRegion? TryParseRegion(IReadOnlyDictionary<string, JsonElement> input)
+    {
+        if (!input.TryGetValue("region", out var r) || r.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+        float Coord(string key) => r.TryGetProperty(key, out var e) && e.ValueKind == JsonValueKind.Number ? (float)e.GetDouble() : 0f;
+        var region = new PageRegion(Coord("x"), Coord("y"), Coord("width"), Coord("height"));
+        return region.Width <= 0 || region.Height <= 0 ? null : region;
+    }
 
     // Готовит "страницу" текста документа начиная с offset и сообщение о том, как
     // (и стоит ли) читать дальше. Общая логика для native и legacy путей, чтобы

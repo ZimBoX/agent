@@ -98,6 +98,9 @@ builder.Services.AddScoped<ChatCompletionService>();
 builder.Services.AddScoped<ChatService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<SandboxedFileAccessService>();
+// Рендер PDF-чертежей в картинки для vision + дисковый кэш результатов (без состояния — Singleton).
+builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.RenderCacheService>();
+builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.DrawingRenderService>();
 // Продолжаемые диалоги живут в памяти (окно = TTL кэша Anthropic, 1 час) —
 // стор Singleton, чтобы состояние переживало отдельные HTTP-запросы.
 builder.Services.AddMemoryCache();
