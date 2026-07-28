@@ -22,13 +22,18 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
     // памяти сервера критично не рендерить метровый лист в гигантский bitmap.
     public const int MaxLongSidePx = 1560;
 
-    private const int ThumbCellWidth = 360;
-    private const int ThumbCellHeight = 250;
+    private const int ThumbCellWidth = 260;
+    private const int ThumbCellHeight = 180;
     private const int MontageColumns = 4;
     private const int MontageMaxPages = 24; // 4×6 листов на монтаж
     private const int Padding = 8;
-    private const int LabelHeight = 22;
+    private const int LabelHeight = 20;
     private const int MaxSnippetLength = 240;
+
+    // Потолок суммарного размера картинок обзора за один вызов. Тонкие линии чертежей
+    // плохо жмутся в JPEG, а вход агрегатора ограничен 8 МБ — держим обзор лёгким;
+    // если листов больше, чем влезло, модель листает через параметр from.
+    private const long MontageByteBudget = 2_200_000;
 
     public int GetPageCount(string pdfPath)
     {
@@ -103,21 +108,38 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
         return EncodeJpeg(bitmap, 82);
     }
 
-    // Монтаж превью всех страниц (несколько картинок, если листов много) с подписью
-    // номера над каждым — модель видит все листы разом и выбирает, где таблицы объёмов.
-    public List<byte[]> RenderMontages(string pdfPath)
+    public record MontageResult(List<byte[]> Montages, int FromPage, int LastPageShown, int TotalPages);
+
+    // Монтаж превью листов с подписью номера — модель видит листы разом и выбирает,
+    // где таблицы объёмов. Начинает с fromPage (с 1); отдаёт монтажи, пока не упрётся
+    // в MontageByteBudget (вход агрегатора ограничен 8 МБ), — остальное листается
+    // повторным вызовом с бо́льшим from.
+    public MontageResult RenderMontages(string pdfPath, int fromPage = 1)
     {
         var pageCount = GetPageCount(pdfPath);
         var mtime = Mtime(pdfPath);
+        var start = Math.Clamp(fromPage - 1, 0, Math.Max(0, pageCount - 1));
+
         var montages = new List<byte[]>();
-        for (var start = 0; start < pageCount; start += MontageMaxPages)
+        long totalBytes = 0;
+        var lastShown = start;
+        while (start < pageCount)
         {
             var startPage = start;
             var count = Math.Min(MontageMaxPages, pageCount - start);
-            var key = $"montage|{pdfPath}|{mtime}|{startPage}|{count}";
-            montages.Add(cache.GetOrCreate(key, () => RenderMontageBatch(pdfPath, startPage, count)));
+            var key = $"montage|{pdfPath}|{mtime}|{startPage}|{count}|v2";
+            var montage = cache.GetOrCreate(key, () => RenderMontageBatch(pdfPath, startPage, count));
+            // Первый монтаж отдаём всегда (даже если крупнее бюджета), дальше — по бюджету.
+            if (montages.Count > 0 && totalBytes + montage.Length > MontageByteBudget)
+            {
+                break;
+            }
+            montages.Add(montage);
+            totalBytes += montage.Length;
+            lastShown = startPage + count;
+            start += MontageMaxPages;
         }
-        return montages;
+        return new MontageResult(montages, start > 0 ? Math.Clamp(fromPage, 1, pageCount) : 1, lastShown, pageCount);
     }
 
     private byte[] RenderMontageBatch(string pdfPath, int startPage, int count)
@@ -172,7 +194,7 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
 
         using var image = surface.Snapshot();
         using var montageBitmap = SKBitmap.FromImage(image);
-        return EncodeJpeg(montageBitmap, 72);
+        return EncodeJpeg(montageBitmap, 58);
     }
 
     // Поиск по текстовому слою PDF: возвращает (номер листа, фрагмент) для листов,
@@ -221,33 +243,5 @@ public class DrawingRenderService(RenderCacheService cache, ILogger<DrawingRende
         return (start > 0 ? "…" : "") + snippet + (end < text.Length ? "…" : "");
     }
 
-    // Кодирует в JPEG. JPEG-энкодер SkiaSharp не поддерживает часть цветовых типов
-    // (Gray8, некоторые alpha) — молча падает в PNG-фолбэк, из-за чего Anthropic ругался
-    // «jpeg media type, but image appears to be png». Поэтому предварительно
-    // перерисовываем в стандартный непрозрачный RGBA. Media type всё равно определяем
-    // по реальным байтам (DetectMediaType) — на случай, если JPEG-энкодера в сборке нет.
-    private static byte[] EncodeJpeg(SKBitmap bitmap, int quality)
-    {
-        var info = new SKImageInfo(bitmap.Width, bitmap.Height, SKColorType.Rgba8888, SKAlphaType.Opaque);
-        using var normalized = new SKBitmap(info);
-        using (var canvas = new SKCanvas(normalized))
-        {
-            canvas.Clear(SKColors.White);
-            canvas.DrawBitmap(bitmap, 0, 0);
-        }
-        using var image = SKImage.FromBitmap(normalized);
-        using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
-        if (data is not null)
-        {
-            return data.ToArray();
-        }
-        // JPEG-энкодер недоступен — отдаём PNG (media type определится по байтам).
-        using var png = image.Encode();
-        return png.ToArray();
-    }
-
-    // Тип картинки по «магическим» байтам — чтобы пометить ImageBlockParam верно,
-    // независимо от того, что реально закодировал SkiaSharp.
-    public static string DetectMediaType(byte[] image) =>
-        image.Length >= 3 && image[0] == 0xFF && image[1] == 0xD8 && image[2] == 0xFF ? "image/jpeg" : "image/png";
+    private static byte[] EncodeJpeg(SKBitmap bitmap, int quality) => SkiaImages.EncodeJpeg(bitmap, quality);
 }

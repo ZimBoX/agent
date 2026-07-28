@@ -8,6 +8,7 @@ using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
 using ClaudeAssistant.Api.Services.AiCompletion;
 using ClaudeAssistant.Api.Services.FileGeneration;
+using ClaudeAssistant.Api.Services.ProjectFiles;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
@@ -499,7 +500,7 @@ public class ChatService(
             parts.AddRange(
                 images.Select(img => (ContentBlockParam)new ImageBlockParam
                 {
-                    Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(img) },
+                    Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(img), Data = Convert.ToBase64String(img) },
                 })
             );
         }

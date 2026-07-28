@@ -609,7 +609,7 @@ public class ChatCompletionService(
                     imageParts.AddRange(
                         images.Select(img => (Block)new ImageBlockParam
                         {
-                            Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(img) },
+                            Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(img), Data = Convert.ToBase64String(img) },
                         })
                     );
                     return (imageParts, 0, images.Count);
@@ -646,22 +646,29 @@ public class ChatCompletionService(
                     {
                         accessedFiles.Add(path);
                     }
-                    var pageCount = drawingRender.GetPageCount(pdfPath);
-                    var montages = drawingRender.RenderMontages(pdfPath);
+                    var overviewFrom = 1;
+                    if (toolUse.Input.TryGetValue("from", out var fromElement) && fromElement.ValueKind == JsonValueKind.Number)
+                    {
+                        fromElement.TryGetInt32(out overviewFrom);
+                    }
+                    var overview = drawingRender.RenderMontages(pdfPath, Math.Max(1, overviewFrom));
+                    var rangeNote = overview.LastPageShown < overview.TotalPages || overview.FromPage > 1
+                        ? $" Показаны листы {overview.FromPage}–{overview.LastPageShown} из {overview.TotalPages}. Чтобы посмотреть следующие — вызови document_overview с from={overview.LastPageShown + 1}."
+                        : "";
                     var overviewBlocks = new List<Block>
                     {
                         new TextBlockParam
                         {
-                            Text = $"Файл «{Path.GetFileName(pdfPath)}» — {pageCount} лист(ов). Ниже превью всех листов с номерами. Найди листы с нужными таблицами (ведомости объёмов, спецификации) и открой их через render_page — при необходимости с region (вырезкой таблицы) для читаемых цифр.",
+                            Text = $"Файл «{Path.GetFileName(pdfPath)}» — {overview.TotalPages} лист(ов).{rangeNote} Ниже превью листов с номерами. Найди листы с нужными таблицами (ведомости объёмов, спецификации) и открой их через render_page — при необходимости с region (вырезкой таблицы) для читаемых цифр.",
                         },
                     };
                     overviewBlocks.AddRange(
-                        montages.Select(m => (Block)new ImageBlockParam
+                        overview.Montages.Select(m => (Block)new ImageBlockParam
                         {
-                            Source = new Base64ImageSource { MediaType = DrawingRenderService.DetectMediaType(m), Data = Convert.ToBase64String(m) },
+                            Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(m), Data = Convert.ToBase64String(m) },
                         })
                     );
-                    return (overviewBlocks, 0, montages.Count);
+                    return (overviewBlocks, 0, overview.Montages.Count);
                 }
 
                 case "render_page":
@@ -689,7 +696,7 @@ public class ChatCompletionService(
                         new List<Block>
                         {
                             new TextBlockParam { Text = label },
-                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = DrawingRenderService.DetectMediaType(png), Data = Convert.ToBase64String(png) } },
+                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(png), Data = Convert.ToBase64String(png) } },
                         },
                         0,
                         1
@@ -779,13 +786,15 @@ public class ChatCompletionService(
         {
             Name = "document_overview",
             Description =
-                "Показывает превью ВСЕХ листов PDF сеткой с номерами — используй ПЕРВЫМ для чертежей и сканов: за пару картинок увидишь все листы и найдёшь те, где нужные таблицы "
-                + "(ведомости объёмов работ, спецификации), не читая всё подряд. Дёшево. Затем открывай нужные листы через render_page.",
+                "Показывает превью листов PDF сеткой с номерами — используй ПЕРВЫМ для чертежей и сканов: за пару картинок увидишь листы и найдёшь те, где нужные таблицы "
+                + "(ведомости объёмов работ, спецификации), не читая всё подряд. Дёшево. Затем открывай нужные листы через render_page. "
+                + "Если листов много, покажется первая часть и будет указано, с каким from вызвать повторно для следующих.",
             InputSchema = new()
             {
                 Properties = new Dictionary<string, JsonElement>
                 {
                     ["path"] = JsonSerializer.SerializeToElement(new { type = "string", description = "Относительный путь к PDF внутри папки объекта" }),
+                    ["from"] = JsonSerializer.SerializeToElement(new { type = "integer", description = "С какого листа показывать превью (по умолчанию 1) — для листания больших PDF" }),
                 },
                 Required = ["path"],
             },
@@ -914,7 +923,7 @@ public class ChatCompletionService(
             parts.AddRange(
                 images.Select(img => (ContentBlockParam)new ImageBlockParam
                 {
-                    Source = new Base64ImageSource { MediaType = "image/png", Data = Convert.ToBase64String(img) },
+                    Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(img), Data = Convert.ToBase64String(img) },
                 })
             );
         }
@@ -1179,7 +1188,7 @@ public class ChatCompletionService(
                     {
                         ChatMessageContentPart.CreateTextPart($"Файл — скан без текстового слоя, {images.Count} стр. приложены как изображения:"),
                     };
-                    imageParts.AddRange(images.Select(img => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(img), "image/png")));
+                    imageParts.AddRange(images.Select(img => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(img), SkiaImages.DetectMediaType(img))));
                     return (imageParts, 0, images.Count);
 
                 default:
@@ -1210,7 +1219,7 @@ public class ChatCompletionService(
         }
 
         var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(text) };
-        parts.AddRange(images.Select(img => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(img), "image/png")));
+        parts.AddRange(images.Select(img => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(img), SkiaImages.DetectMediaType(img))));
         return new UserChatMessage(parts);
     }
 

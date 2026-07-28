@@ -15,7 +15,11 @@ public class FileTextExtractor
 {
     // Ограничивает число страниц скана, которые уходят в модель как картинки —
     // без этого многостраничный скан раздул бы и запрос, и стоимость без предела.
-    private const int MaxRenderedPdfPages = 15;
+    private const int MaxRenderedPdfPages = 10;
+
+    // Потолок длинной стороны рендера скан-страницы (совпадает с даунскейлом Anthropic
+    // ~1568px): больше не нужно, а метровые листы иначе рендерятся в гигантские картинки.
+    private const int MaxScanLongSidePx = 1560;
 
     public async Task<ExtractionResult> ExtractAsync(Stream stream, string fileName)
     {
@@ -131,9 +135,19 @@ public class FileTextExtractor
         var images = new List<byte[]>();
         for (var i = 0; i < pagesToRender; i++)
         {
-            using var pngStream = new MemoryStream();
-            PDFtoImage.Conversion.SavePng(pngStream, pdfBytes, i, password: null, options: new PDFtoImage.RenderOptions(Dpi: 150));
-            images.Add(pngStream.ToArray());
+            // Ограничиваем длинную сторону, иначе метровый лист при Dpi:150 давал
+            // гигантский PNG (одна страница пробивала лимит входа агрегатора 8 МБ).
+            // Рендерим в размер под vision и кодируем JPEG (в разы легче).
+            var options = new PDFtoImage.RenderOptions
+            {
+                Width = MaxScanLongSidePx,
+                Height = MaxScanLongSidePx,
+                WithAspectRatio = true,
+                UseTiling = true,
+                BackgroundColor = SkiaSharp.SKColors.White,
+            };
+            using var bitmap = PDFtoImage.Conversion.ToImage(pdfBytes, i, (string?)null, options);
+            images.Add(ClaudeAssistant.Api.Services.ProjectFiles.SkiaImages.EncodeJpeg(bitmap, 78));
         }
 
         return new ExtractionResult(null, images);
