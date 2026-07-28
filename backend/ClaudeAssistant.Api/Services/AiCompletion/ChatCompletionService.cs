@@ -88,9 +88,13 @@ public class ChatCompletionService(
 
     // Сколько последних сообщений сохраняют картинки в запросе к модели. Картинки
     // (превью/вырезки чертежей) тяжёлые и накапливаются в истории — если слать их все,
-    // запрос пробивает лимит входа агрегатора (8 МБ). Из более старых сообщений
-    // картинки вырезаются (модель к тому моменту уже перенесла нужные цифры в текст).
-    private const int KeepImageWindowMessages = 4;
+    // запрос раздувается: помимо лимита входа Anthropic (8 МБ) у edge-воркера
+    // агрегатора (Cloudflare) потолок ЖЁСТЧЕ — на ~5 МБ тела он падал с «error code
+    // 1102: Worker exceeded resource limits» ещё до Anthropic. Держим окно узким: 2 =
+    // последний ход с картинками (assistant tool_use + user tool_result) — модель
+    // видит то, что только что запросила, а цифры со старых листов уже перенесла в
+    // текст. Картинки из более старых сообщений заменяются текст-заглушкой.
+    private const int KeepImageWindowMessages = 2;
 
     // Максимум обращений к web_search за один вызов модели (серверный инструмент
     // Anthropic сам себя ограничивает этим числом). Каждый поиск стоит денег
@@ -271,7 +275,8 @@ public class ChatCompletionService(
             // это же покрывает и веб-поиск, который идёт внутри вызова).
             status?.Report("Думаю…");
 
-            var response = await client.Messages.Create(
+            var response = await CreateWithEdgeRetryAsync(
+                client,
                 new MessageCreateParams
                 {
                     Model = model,
@@ -339,7 +344,8 @@ public class ChatCompletionService(
         // Лимит итераций исчерпан — просим финальный текстовый ответ без
         // инструментов, а не молча обрываем запрос без ответа пользователю (см.
         // ту же логику и комментарий в legacy-версии ниже).
-        var finalResponse = await client.Messages.Create(
+        var finalResponse = await CreateWithEdgeRetryAsync(
+            client,
             new MessageCreateParams
             {
                 Model = model,
@@ -962,6 +968,46 @@ public class ChatCompletionService(
             }
         }
         return sb.ToString();
+    }
+
+    // Узкий, безопасный ретрай ТОЛЬКО на явные HTTP-ошибки сервера/лимита от
+    // агрегатора (5xx — в т.ч. Cloudflare «error code 1102: Worker exceeded
+    // resource limits» на edge — и 429). Такой ответ означает, что запрос
+    // ОТКЛОНЁН до успешной генерации: до Anthropic он не дошёл, токены не списаны
+    // (подтверждено — при 1102 в панели агрегатора запрос пустой), поэтому повтор
+    // безопасен и не задваивает оплату. СОЗНАТЕЛЬНО не ретраим таймаут/отмену
+    // (OperationCanceledException) и IO-обрывы: там генерация могла уже идти и
+    // билля — именно этот сценарий когда-то и запретил автоповторы (см. коммент к
+    // ModelCallMaxRetries). Общий built-in MaxRetries SDK остаётся 0.
+    private async Task<Message> CreateWithEdgeRetryAsync(
+        AnthropicClient client,
+        MessageCreateParams parameters,
+        CancellationToken cancellationToken
+    )
+    {
+        const int maxAttempts = 3; // 1 обычная + 2 повтора
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await client.Messages.Create(parameters, cancellationToken);
+            }
+            catch (Exception ex)
+                when (attempt < maxAttempts
+                    && ex is Anthropic.Exceptions.Anthropic5xxException or Anthropic.Exceptions.AnthropicRateLimitException)
+            {
+                var delay = TimeSpan.FromSeconds(attempt * 4); // 4с, 8с
+                logger.LogWarning(
+                    ex,
+                    "Агрегатор отклонил запрос ({Type}) — попытка {Attempt}/{Max}, повтор через {Delay}с",
+                    ex.GetType().Name,
+                    attempt,
+                    maxAttempts,
+                    delay.TotalSeconds
+                );
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
     }
 
     private AnthropicClient CreateNativeClient()
