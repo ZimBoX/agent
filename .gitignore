@@ -22,6 +22,7 @@ Thumbs.db
 ## Release artifacts (large binaries, not source)
 releases-local/
 releases-local-beta/
+releases-local-win/
 release-v1.zip
 release-v2.zip
 *.zip
