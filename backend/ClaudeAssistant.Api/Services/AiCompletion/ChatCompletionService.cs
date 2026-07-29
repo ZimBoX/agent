@@ -1094,15 +1094,42 @@ public class ChatCompletionService(
     private static readonly string[] InternalToolNames =
         ["render_page", "document_overview", "read_document", "list_files", "search_document"];
 
+    // Фразы-НАМЕРЕНИЯ продолжить работу: если ход заканчивается ими (без вызова
+    // инструмента), это не ответ пользователю, а план вслух — модель «зависла» на
+    // нарративе. Реальный итог (готовая ведомость) так не заканчивается. Ловим и
+    // случаи БЕЗ упоминания имён инструментов — напр. haiku: «Перейду к верхней
+    // части листа», qwen: «попробую ещё раз». RU + EN, нижний регистр.
+    private static readonly string[] ContinuationMarkers =
+    [
+        "перейд", "теперь нужн", "теперь посмотр", "теперь я ", "теперь получ", "теперь давай",
+        "сейчас посмотр", "сейчас перейд", "сейчас проверю", "сейчас получ", "сейчас я ",
+        "далее посмотр", "далее перейд", "далее я ", "продолжу", "приступлю", "приступаю",
+        "осталось посмотр", "осталось проверить", "нужно посмотреть", "нужно проверить",
+        "нужно ещё", "нужно еще", "давай посмотр", "давайте посмотр", "попробую", "попробуем",
+        "посмотрю на", "проверю ещё", "проверю еще", "рассмотрю ",
+        "let me ", "i'll ", "i will ", "i'm going to", "i am going to", "next i", "now i ",
+        "let's look", "let's check", "i need to look", "i need to check", "going to look",
+    ];
+
     // Похоже ли, что модель не выдала настоящий результат, а остановилась посреди
-    // работы: пусто ЛИБО текст ссылается на внутренние инструменты (план вслух).
+    // работы: пусто; ЛИБО текст ссылается на внутренние инструменты; ЛИБО
+    // заканчивается фразой-намерением продолжить (план вслух).
     private static bool LooksUnfinished(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return true;
         }
-        return InternalToolNames.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
+        if (InternalToolNames.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        // Маркеры-намерения ищем в ХВОСТЕ хода (последние ~200 симв.) — так «проверю»
+        // в середине готового ответа не даст ложного срабатывания, а завершающее
+        // «…перейду к…»/«…let me…» — сработает.
+        var tail = text.Length > 200 ? text[^200..] : text;
+        return ContinuationMarkers.Any(m => tail.Contains(m, StringComparison.OrdinalIgnoreCase));
     }
 
     private const string FinalizeNudgeText =
