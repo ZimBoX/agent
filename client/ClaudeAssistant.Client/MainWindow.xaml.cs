@@ -128,6 +128,32 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _inFlightCts;
     private bool _cancelledByUser;
 
+    // Выбранная админом модель (тест цена/качество). null — модель по умолчанию.
+    // Селектор виден только админу (см. LoadCurrentUserOnceAsync); применяется к
+    // своему промпту и к новым чатам.
+    private string? _selectedModelId;
+
+    private void OnModelSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var id = (ModelSelector.SelectedItem as ModelInfo)?.ModelId;
+        _selectedModelId = string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    private async Task LoadModelsForAdminAsync()
+    {
+        var models = await _backendClient.GetModelsAsync();
+        if (models is null || models.Count == 0)
+        {
+            return;
+        }
+        // Первый пункт — «по умолчанию» (пустой ModelId → override не шлём).
+        var items = new List<ModelInfo> { new(Guid.Empty, "", "(по умолчанию)") };
+        items.AddRange(models);
+        ModelSelector.ItemsSource = items;
+        ModelSelector.SelectedIndex = 0;
+        ModelPanel.Visibility = Visibility.Visible;
+    }
+
     // Пользователь нажал «Прервать»: помечаем и отменяем токен. HTTP-вызов оборвётся,
     // сервер получит RequestAborted и остановит модельный вызов (см. RequestsController).
     private void CancelInFlight()
@@ -304,6 +330,12 @@ public partial class MainWindow : Window
             UserRoleText.Text = me.Role ?? "";
             UserNameTextExpanded.Text = me.FullName;
             UserRoleTextExpanded.Text = me.Role ?? "";
+
+            // Селектор модели — только админу (тест цена/качество).
+            if (me.IsAdmin)
+            {
+                await LoadModelsForAdminAsync();
+            }
         }
         catch (HttpRequestException)
         {
@@ -508,7 +540,7 @@ public partial class MainWindow : Window
         ExecuteResult result;
         try
         {
-            result = await _backendClient.ExecuteAsync(templateId, customPrompt, selectedPaths, objectFolder, _inFlightCts.Token);
+            result = await _backendClient.ExecuteAsync(templateId, customPrompt, selectedPaths, objectFolder, _selectedModelId, _inFlightCts.Token);
         }
         finally
         {
@@ -994,7 +1026,7 @@ public partial class MainWindow : Window
         ChatSendResult result;
         try
         {
-            result = await _backendClient.SendChatAsync(_chatConversationId, text, attachments, _inFlightCts.Token);
+            result = await _backendClient.SendChatAsync(_chatConversationId, text, attachments, _selectedModelId, _inFlightCts.Token);
         }
         finally
         {

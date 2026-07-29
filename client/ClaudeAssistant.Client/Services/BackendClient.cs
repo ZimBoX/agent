@@ -36,7 +36,10 @@ public record ExecuteResult(bool Success, string? ResultText, string? ErrorMessa
 // Expired=true — сессия истекла (410): продолжать нельзя, нужен новый запрос.
 public record ContinueResult(bool Success, string? ResultText, string? ErrorMessage, string? AccessedFiles = null, bool Expired = false, IReadOnlyList<GeneratedFile>? Files = null);
 
-public record MeInfo(string? FullName, string? Role);
+public record MeInfo(string? FullName, string? Role, bool IsAdmin = false);
+
+// Модель из управляемого админкой списка — для селектора у админа.
+public record ModelInfo(Guid Id, string ModelId, string DisplayName);
 
 public record ChatConversationInfo(Guid Id, string Title, DateTimeOffset UpdatedAt);
 
@@ -104,6 +107,25 @@ public class BackendClient
         return await response.Content.ReadFromJsonAsync<MeInfo>();
     }
 
+    // Список моделей для селектора. Сервер отдаёт непусто только админу.
+    public async Task<List<ModelInfo>?> GetModelsAsync()
+    {
+        AttachAuth();
+        try
+        {
+            var response = await _http.GetAsync("/api/models");
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+            return await response.Content.ReadFromJsonAsync<List<ModelInfo>>();
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
     public async Task LogoutAsync()
     {
         AttachAuth();
@@ -162,7 +184,7 @@ public class BackendClient
     // абсолютный путь к папке (папка прикреплённого файла или папка, из которой
     // запустили клиент через Проводник — см. MainWindow.GetCurrentObjectRoot),
     // внутри которой модель сама сможет искать и читать файлы.
-    public async Task<ExecuteResult> ExecuteAsync(Guid? templateId, string? customPrompt, IReadOnlyList<string> filePaths, string? objectFolder = null, CancellationToken cancellationToken = default)
+    public async Task<ExecuteResult> ExecuteAsync(Guid? templateId, string? customPrompt, IReadOnlyList<string> filePaths, string? objectFolder = null, string? model = null, CancellationToken cancellationToken = default)
     {
         AttachAuth();
 
@@ -178,6 +200,10 @@ public class BackendClient
         if (objectFolder is not null)
         {
             content.Add(new StringContent(objectFolder), "objectFolder");
+        }
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            content.Add(new StringContent(model), "model");
         }
 
         var fileStreams = new List<FileStream>();
@@ -305,7 +331,7 @@ public class BackendClient
 
     // Ответ приходит целиком по завершении (авторитетный текст); токены по мере
     // генерации — отдельно по SignalR (RealtimeService.ChatToken).
-    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text, IReadOnlyList<string> filePaths, CancellationToken cancellationToken = default)
+    public async Task<ChatSendResult> SendChatAsync(Guid? conversationId, string text, IReadOnlyList<string> filePaths, string? model = null, CancellationToken cancellationToken = default)
     {
         AttachAuth();
 
@@ -313,6 +339,10 @@ public class BackendClient
         if (conversationId is { } id)
         {
             content.Add(new StringContent(id.ToString()), "conversationId");
+        }
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            content.Add(new StringContent(model), "model");
         }
 
         var fileStreams = new List<FileStream>();

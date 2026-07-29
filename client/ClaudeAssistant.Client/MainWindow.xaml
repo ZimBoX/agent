@@ -78,6 +78,15 @@
                         <TextBlock x:Name="ObjectRootText" FontSize="13" TextWrapping="Wrap" Foreground="{StaticResource AppTextPrimaryBrush}" />
                     </Border>
                 </StackPanel>
+                <!-- Селектор модели — виден только админу (тест цена/качество);
+                     применяется к своему промпту и к новым чатам -->
+                <StackPanel x:Name="ModelPanel" Visibility="Collapsed" Spacing="6">
+                    <TextBlock Text="Модель (тест)" FontSize="12" Foreground="{StaticResource AppTextSecondaryBrush}" />
+                    <ComboBox x:Name="ModelSelector" DisplayMemberPath="DisplayName" HorizontalAlignment="Stretch"
+                              SelectionChanged="OnModelSelectionChanged"
+                              Background="{StaticResource AppCardBackgroundBrush}" BorderBrush="{StaticResource AppBorderBrush}"
+                              BorderThickness="1" CornerRadius="10" PlaceholderText="По умолчанию" />
+                </StackPanel>
             </StackPanel>
 
             <!-- Файлы: кнопки — растянуты на всю ширину поровну, чтобы совпадать
