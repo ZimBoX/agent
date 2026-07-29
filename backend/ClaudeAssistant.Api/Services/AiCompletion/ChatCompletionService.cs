@@ -1139,7 +1139,12 @@ public class ChatCompletionService(
         CancellationToken cancellationToken
     )
     {
-        const int maxAttempts = 3; // 1 обычная + 2 повтора
+        // 429 (rate-limit) у некоторых моделей агрегатора частый — напр. qwen идёт
+        // через шаред-ключ и «temporarily rate-limited upstream» прилетает пачками
+        // (подтверждено симуляцией: ~3 из 5 первых запросов). Обычно отпускает за
+        // пару секунд, поэтому даём щедрый бюджет повторов с растущим бэк-оффом.
+        // Повтор безопасен (запрос отклонён до генерации — не задваивает оплату).
+        const int maxAttempts = 6; // 1 обычная + 5 повторов (~ до 45с суммарно)
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -1150,7 +1155,8 @@ public class ChatCompletionService(
                 when (attempt < maxAttempts
                     && ex is Anthropic.Exceptions.Anthropic5xxException or Anthropic.Exceptions.AnthropicRateLimitException)
             {
-                var delay = TimeSpan.FromSeconds(attempt * 4); // 4с, 8с
+                // Rate-limit «отпускает» быстро — начинаем с короткой паузы, растём линейно; потолок 15с.
+                var delay = TimeSpan.FromSeconds(Math.Min(attempt * 3, 15)); // 3,6,9,12,15
                 logger.LogWarning(
                     ex,
                     "Агрегатор отклонил запрос ({Type}) — попытка {Attempt}/{Max}, повтор через {Delay}с",
