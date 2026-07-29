@@ -296,18 +296,49 @@ public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub, PricingS
     public async Task<AiModel> CreateAiModelAsync(string modelId, string displayName)
     {
         var maxOrder = await db.AiModels.Select(m => (int?)m.SortOrder).MaxAsync() ?? 0;
+        var id = modelId.Trim();
         var model = new AiModel
         {
             Id = Guid.NewGuid(),
-            ModelId = modelId.Trim(),
-            DisplayName = string.IsNullOrWhiteSpace(displayName) ? modelId.Trim() : displayName.Trim(),
+            ModelId = id,
+            DisplayName = string.IsNullOrWhiteSpace(displayName) ? id : displayName.Trim(),
             SortOrder = maxOrder + 1,
+            // По умолчанию claude-семейство — по нативному пути Anthropic, остальные — OpenAI.
+            UseAnthropicWire = IsClaudeFamily(id),
             CreatedAt = DateTimeOffset.UtcNow,
         };
         db.AiModels.Add(model);
         await db.SaveChangesAsync();
         return model;
     }
+
+    public async Task<bool> UpdateAiModelWireAsync(Guid id, bool useAnthropicWire)
+    {
+        var model = await db.AiModels.FindAsync(id);
+        if (model is null)
+        {
+            return false;
+        }
+        model.UseAnthropicWire = useAnthropicWire;
+        await db.SaveChangesAsync();
+        return true;
+    }
+
+    // По какому протоколу гнать модель: из списка (флаг), иначе эвристика по имени.
+    // Дефолтные модели (свой промпт/шаблон/чат) в списке может не быть — тогда
+    // claude-семейство → Anthropic, остальные → OpenAI.
+    public async Task<bool> UseAnthropicWireForAsync(string modelId)
+    {
+        var known = await db.AiModels
+            .Where(m => m.ModelId == modelId)
+            .Select(m => (bool?)m.UseAnthropicWire)
+            .FirstOrDefaultAsync();
+        return known ?? IsClaudeFamily(modelId);
+    }
+
+    private static bool IsClaudeFamily(string modelId) =>
+        modelId.Contains("claude", StringComparison.OrdinalIgnoreCase)
+        || modelId.Contains("anthropic", StringComparison.OrdinalIgnoreCase);
 
     public async Task<bool> DeleteAiModelAsync(Guid id)
     {

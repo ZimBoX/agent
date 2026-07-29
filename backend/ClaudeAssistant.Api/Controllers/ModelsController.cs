@@ -28,7 +28,7 @@ public class ModelsController(AppDbContext db) : ControllerBase
         var models = await db.AiModels
             .OrderBy(m => m.SortOrder)
             .ThenBy(m => m.DisplayName)
-            .Select(m => new AiModelResponse(m.Id, m.ModelId, m.DisplayName))
+            .Select(m => new AiModelResponse(m.Id, m.ModelId, m.DisplayName, m.UseAnthropicWire))
             .ToListAsync();
         return Ok(models);
     }

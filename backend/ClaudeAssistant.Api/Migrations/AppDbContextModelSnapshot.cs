@@ -42,6 +42,9 @@ namespace ClaudeAssistant.Api.Migrations
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("UseAnthropicWire")
+                        .HasColumnType("boolean");
+
                     b.HasKey("Id");
 
                     b.ToTable("AiModels");

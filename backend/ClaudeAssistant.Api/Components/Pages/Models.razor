@@ -36,6 +36,7 @@ else
         <tr>
             <th>Название</th>
             <th>Идентификатор</th>
+            <th>Через Anthropic (/v1/messages)</th>
             <th></th>
         </tr>
         </thead>
@@ -45,11 +46,18 @@ else
             <tr>
                 <td>@m.DisplayName</td>
                 <td><code>@m.ModelId</code></td>
+                <td>
+                    <label class="role-checkbox">
+                        <input type="checkbox" checked="@m.UseAnthropicWire"
+                               @onchange="@(e => ToggleWireAsync(m, (bool)e.Value!))" />
+                    </label>
+                </td>
                 <td><button @onclick="() => DeleteAsync(m.Id, m.DisplayName)">Удалить</button></td>
             </tr>
         }
         </tbody>
     </table>
+    <p style="color:#666;font-size:13px">Галка — модель ходит по нативному пути Anthropic (нужно для claude). Без галки — по OpenAI-совместимому пути (для gemini, qwen, gpt и т.п.).</p>
 }
 
 @code {
@@ -76,6 +84,12 @@ else
         _newModelId = "";
         _newDisplayName = "";
         _models = await AdminService.ListAiModelsAsync();
+    }
+
+    private async Task ToggleWireAsync(AiModel model, bool useAnthropicWire)
+    {
+        await AdminService.UpdateAiModelWireAsync(model.Id, useAnthropicWire);
+        model.UseAnthropicWire = useAnthropicWire;
     }
 
     private async Task DeleteAsync(Guid id, string name)

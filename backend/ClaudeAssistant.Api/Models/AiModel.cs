@@ -10,5 +10,11 @@ public class AiModel
     public required string ModelId { get; set; }
     public required string DisplayName { get; set; }
     public int SortOrder { get; set; }
+
+    // true — запросы этой модели идут по НАТИВНОМУ пути Anthropic (/v1/messages);
+    // false — по OpenAI-совместимому (/v1/chat/completions). По умолчанию для
+    // моделей семейства claude — true, для остальных — false (см. AdminService).
+    public bool UseAnthropicWire { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 }

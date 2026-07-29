@@ -139,7 +139,7 @@ public class AdminController(AdminService adminService) : ControllerBase
     public async Task<ActionResult<List<AiModelResponse>>> ListAiModels()
     {
         var models = await adminService.ListAiModelsAsync();
-        return Ok(models.Select(m => new AiModelResponse(m.Id, m.ModelId, m.DisplayName)).ToList());
+        return Ok(models.Select(m => new AiModelResponse(m.Id, m.ModelId, m.DisplayName, m.UseAnthropicWire)).ToList());
     }
 
     [HttpPost("models")]
@@ -150,7 +150,14 @@ public class AdminController(AdminService adminService) : ControllerBase
             return BadRequest(new ErrorResponse("Укажите идентификатор модели"));
         }
         var model = await adminService.CreateAiModelAsync(request.ModelId, request.DisplayName);
-        return Ok(new AiModelResponse(model.Id, model.ModelId, model.DisplayName));
+        return Ok(new AiModelResponse(model.Id, model.ModelId, model.DisplayName, model.UseAnthropicWire));
+    }
+
+    [HttpPut("models/{id:guid}/anthropic-wire")]
+    public async Task<IActionResult> UpdateAiModelWire(Guid id, [FromBody] bool useAnthropicWire)
+    {
+        var updated = await adminService.UpdateAiModelWireAsync(id, useAnthropicWire);
+        return updated ? NoContent() : NotFound();
     }
 
     [HttpDelete("models/{id:guid}")]
