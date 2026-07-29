@@ -276,6 +276,7 @@ public class ChatCompletionService(
         var usage = TokenUsage.Empty;
         var totalDocumentChars = 0;
         var totalToolImages = 0;
+        var finalizeNudges = 0;
 
         for (var iteration = 0; iteration < MaxToolIterations; iteration++)
         {
@@ -308,10 +309,34 @@ public class ChatCompletionService(
 
             if (response.StopReason != "tool_use")
             {
-                var answer = RequireNonEmptyTextNative(response);
-                AppendAssistantAnswer(messages, answer);
+                var answer = ExtractTextNative(response);
+
+                // Частый сбой agentic-цикла (не зависит от модели — воспроизведён на
+                // Claude и Qwen): модель встаёт БЕЗ вызова инструмента и вместо
+                // результата отдаёт рассуждения-план («попробую отрендерить…»,
+                // упоминает render_page и т.п.) либо вовсе пустой текст. Раньше это
+                // молча возвращалось пользователю как «ответ». Теперь, пока есть бюджет
+                // подталкиваний, мы НЕ принимаем такой ход за финал: дописываем его в
+                // контекст и коротким user-сообщением заставляем либо вызвать
+                // инструмент, либо выдать окончательный результат — и крутим цикл дальше.
+                var isTruncated = response.StopReason == "max_tokens"; // ответ обрезан по длине — не план, отдаём как есть
+                if (!isTruncated && finalizeNudges < MaxFinalizeNudges && LooksUnfinished(answer))
+                {
+                    finalizeNudges++;
+                    // Всегда дописываем ход ассистента (заглушка при пустом тексте),
+                    // иначе после user-сообщения с tool_result пойдёт второй user-нудж
+                    // подряд — часть моделей/агрегатор на такое ругаются.
+                    AppendAssistantAnswer(messages, string.IsNullOrWhiteSpace(answer) ? "…" : answer);
+                    messages.Add(
+                        new MessageParam { Role = Role.User, Content = new List<ContentBlockParam> { new TextBlockParam { Text = FinalizeNudgeText } } }
+                    );
+                    continue;
+                }
+
+                var settledAnswer = RequireNonEmptyTextNative(response);
+                AppendAssistantAnswer(messages, settledAnswer);
                 StripAllStoredImages(messages);
-                return new AgenticCompletionResult(answer, accessedFiles, generatedFiles, usage);
+                return new AgenticCompletionResult(settledAnswer, accessedFiles, generatedFiles, usage);
             }
 
             List<ContentBlockParam> assistantContent = [];
@@ -980,6 +1005,33 @@ public class ChatCompletionService(
 
     // См. комментарий у RequireNonEmptyText (legacy) — тот же самый реальный
     // инцидент с формально успешным, но пустым ответом.
+    // Сколько раз за один ход мы подталкиваем модель, вставшую без результата и без
+    // вызова инструмента, прежде чем принять её текст (или пустоту) как финал. Мало —
+    // не пробьёт затык; много — риск раздуть стоимость на упорно «зависшей» модели.
+    private const int MaxFinalizeNudges = 3;
+
+    // Имена внутренних инструментов: их упоминание в «финальном» тексте — верный
+    // признак, что модель не отвечает пользователю, а вслух планирует следующий шаг.
+    private static readonly string[] InternalToolNames =
+        ["render_page", "document_overview", "read_document", "list_files", "search_document"];
+
+    // Похоже ли, что модель не выдала настоящий результат, а остановилась посреди
+    // работы: пусто ЛИБО текст ссылается на внутренние инструменты (план вслух).
+    private static bool LooksUnfinished(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+        return InternalToolNames.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private const string FinalizeNudgeText =
+        "Ты остановился, не вызвав инструмент и не выдав итог. НЕ рассуждай вслух и не описывай план. "
+        + "Сейчас одно из двух: (а) если данные ещё не собраны — ВЫЗОВИ нужный инструмент (render_page с region для чтения цифр и т.п.) и продолжи; "
+        + "(б) если данные уже собраны — выведи ОКОНЧАТЕЛЬНЫЙ результат для пользователя целиком (готовую таблицу/ведомость). "
+        + "Внутренние инструменты в ответе пользователю не упоминай. Не отвечай этим сообщением-инструкцией — действуй.";
+
     private static string RequireNonEmptyTextNative(Message response)
     {
         var text = ExtractTextNative(response);
