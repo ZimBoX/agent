@@ -288,6 +288,49 @@ public class AdminService(AppDbContext db, IHubContext<UpdatesHub> hub, PricingS
         return true;
     }
 
+    // ===== Модели (управляемый список для селектора у админа в клиенте) =====
+
+    public async Task<List<AiModel>> ListAiModelsAsync() =>
+        await db.AiModels.OrderBy(m => m.SortOrder).ThenBy(m => m.DisplayName).ToListAsync();
+
+    public async Task<AiModel> CreateAiModelAsync(string modelId, string displayName)
+    {
+        var maxOrder = await db.AiModels.Select(m => (int?)m.SortOrder).MaxAsync() ?? 0;
+        var model = new AiModel
+        {
+            Id = Guid.NewGuid(),
+            ModelId = modelId.Trim(),
+            DisplayName = string.IsNullOrWhiteSpace(displayName) ? modelId.Trim() : displayName.Trim(),
+            SortOrder = maxOrder + 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        db.AiModels.Add(model);
+        await db.SaveChangesAsync();
+        return model;
+    }
+
+    public async Task<bool> DeleteAiModelAsync(Guid id)
+    {
+        var model = await db.AiModels.FindAsync(id);
+        if (model is null)
+        {
+            return false;
+        }
+        db.AiModels.Remove(model);
+        await db.SaveChangesAsync();
+        return true;
+    }
+
+    // Разрешён ли этому ModelId выбор (есть ли он в управляемом списке) — сервер
+    // принимает model-override от админа только для моделей из списка.
+    public async Task<bool> IsKnownModelAsync(string modelId) =>
+        await db.AiModels.AnyAsync(m => m.ModelId == modelId);
+
+    // Роль (по имени, как в токене устройства) помечена админской? Единая точка —
+    // и для показа селектора, и для авторизации model-override.
+    public async Task<bool> IsAdminRoleAsync(string? roleName) =>
+        roleName is not null && await db.Roles.AnyAsync(r => r.Name == roleName && r.IsAdmin);
+
     public async Task<List<Template>> ListTemplatesAsync() =>
         await db.Templates.Include(t => t.Roles).OrderBy(t => t.Title).ToListAsync();
 

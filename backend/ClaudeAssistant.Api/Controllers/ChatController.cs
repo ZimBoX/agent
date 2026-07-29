@@ -10,7 +10,7 @@ namespace ClaudeAssistant.Api.Controllers;
 [ApiController]
 [Route("api/chat")]
 [Authorize]
-public class ChatController(ChatService chatService, MultiFileExtractionService extractionService) : ControllerBase
+public class ChatController(ChatService chatService, MultiFileExtractionService extractionService, AdminService adminService) : ControllerBase
 {
     private Guid UserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
@@ -22,6 +22,9 @@ public class ChatController(ChatService chatService, MultiFileExtractionService 
     public async Task<ActionResult<ChatSendResponse>> Send(
         [FromForm] Guid? conversationId,
         [FromForm] string? text,
+        // Override модели — только от админа и только из списка (иначе игнор).
+        // Действует на НОВЫЙ диалог; существующий сохраняет свою модель.
+        [FromForm(Name = "model")] string? modelOverride,
         List<IFormFile> files,
         CancellationToken cancellationToken
     )
@@ -29,6 +32,16 @@ public class ChatController(ChatService chatService, MultiFileExtractionService 
         if (string.IsNullOrWhiteSpace(text) && files.Count == 0)
         {
             return BadRequest(new { error = "Пустое сообщение" });
+        }
+
+        string? effectiveModel = null;
+        if (!string.IsNullOrWhiteSpace(modelOverride))
+        {
+            var role = User.FindFirstValue(ClaimTypes.Role);
+            if (await adminService.IsAdminRoleAsync(role) && await adminService.IsKnownModelAsync(modelOverride))
+            {
+                effectiveModel = modelOverride;
+            }
         }
 
         string? combinedFileText = null;
@@ -56,6 +69,7 @@ public class ChatController(ChatService chatService, MultiFileExtractionService 
             combinedFileText,
             images,
             fileNames,
+            effectiveModel,
             cancellationToken
         );
         return Ok(response);

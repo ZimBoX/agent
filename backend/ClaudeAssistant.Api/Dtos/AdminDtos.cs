@@ -23,3 +23,7 @@ public record TemplateResponse(Guid Id, string Title, List<RoleResponse> Roles, 
 public record CreateRoleRequest(string Name, bool IsAdmin = false);
 
 public record RoleResponse(Guid Id, string Name, bool IsAdmin = false);
+
+public record CreateAiModelRequest(string ModelId, string DisplayName);
+
+public record AiModelResponse(Guid Id, string ModelId, string DisplayName);

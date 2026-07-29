@@ -133,6 +133,33 @@ public class AdminController(AdminService adminService) : ControllerBase
         return updated ? NoContent() : NotFound();
     }
 
+    // ===== Модели (список для селектора у админа в клиенте) =====
+
+    [HttpGet("models")]
+    public async Task<ActionResult<List<AiModelResponse>>> ListAiModels()
+    {
+        var models = await adminService.ListAiModelsAsync();
+        return Ok(models.Select(m => new AiModelResponse(m.Id, m.ModelId, m.DisplayName)).ToList());
+    }
+
+    [HttpPost("models")]
+    public async Task<ActionResult<AiModelResponse>> CreateAiModel(CreateAiModelRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ModelId))
+        {
+            return BadRequest(new ErrorResponse("Укажите идентификатор модели"));
+        }
+        var model = await adminService.CreateAiModelAsync(request.ModelId, request.DisplayName);
+        return Ok(new AiModelResponse(model.Id, model.ModelId, model.DisplayName));
+    }
+
+    [HttpDelete("models/{id:guid}")]
+    public async Task<IActionResult> DeleteAiModel(Guid id)
+    {
+        var deleted = await adminService.DeleteAiModelAsync(id);
+        return deleted ? NoContent() : NotFound();
+    }
+
     [HttpPost("devices/{deviceId:guid}/revoke")]
     public async Task<IActionResult> RevokeDevice(Guid deviceId)
     {

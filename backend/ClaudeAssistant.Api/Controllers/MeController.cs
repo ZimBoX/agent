@@ -24,7 +24,12 @@ public class MeController(AppDbContext db) : ControllerBase
             fullName = await db.Users.Where(u => u.Id == userId).Select(u => u.FullName).FirstOrDefaultAsync();
         }
 
-        return Ok(new { userId = userIdText, fullName, role, deviceId });
+        // Клиент по isAdmin решает, показывать ли селектор модели (обычным
+        // пользователям он не нужен). Админ — та же роль с IsAdmin, что видит все
+        // шаблоны (см. Role.cs / TemplatesController).
+        var isAdmin = role is not null && await db.Roles.AnyAsync(r => r.Name == role && r.IsAdmin);
+
+        return Ok(new { userId = userIdText, fullName, role, deviceId, isAdmin });
     }
 
     // Логаут по инициативе самого пользователя (кнопка в клиенте), а не отзыв

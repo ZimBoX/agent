@@ -1,0 +1,92 @@
+@page "/admin/models"
+@attribute [Authorize(Policy = AdminAuthDefaults.PolicyName)]
+@inject AdminService AdminService
+@inject IJSRuntime JS
+
+<h2>Модели</h2>
+<p>Список моделей агрегатора, доступных <strong>админу</strong> для выбора прямо в клиенте
+    (подбор баланса цена/качество). Обычные сотрудники селектор не видят и работают на
+    модели по умолчанию. «Идентификатор» — точное имя модели у агрегатора
+    (например <code>qwen3.7-flash</code>, <code>gemini-3-flash-preview</code>, <code>claude-sonnet-5</code>);
+    «Название» — как показать в списке.</p>
+
+<form @onsubmit="CreateAsync" @onsubmit:preventDefault>
+    <input @bind="_newModelId" placeholder="Идентификатор (qwen3.7-flash)" required />
+    <input @bind="_newDisplayName" placeholder="Название (Qwen 3.7 Flash)" />
+    <button type="submit">Добавить</button>
+</form>
+
+@if (_errorMessage is not null)
+{
+    <p class="error">@_errorMessage</p>
+}
+
+@if (_models is null)
+{
+    <p>Загрузка...</p>
+}
+else if (_models.Count == 0)
+{
+    <p>Моделей пока нет — добавьте хотя бы одну, чтобы в клиенте у админа появился селектор.</p>
+}
+else
+{
+    <table>
+        <thead>
+        <tr>
+            <th>Название</th>
+            <th>Идентификатор</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var m in _models)
+        {
+            <tr>
+                <td>@m.DisplayName</td>
+                <td><code>@m.ModelId</code></td>
+                <td><button @onclick="() => DeleteAsync(m.Id, m.DisplayName)">Удалить</button></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<AiModel>? _models;
+    private string _newModelId = "";
+    private string _newDisplayName = "";
+    private string? _errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _models = await AdminService.ListAiModelsAsync();
+    }
+
+    private async Task CreateAsync()
+    {
+        _errorMessage = null;
+        var modelId = _newModelId.Trim();
+        if (string.IsNullOrWhiteSpace(modelId))
+        {
+            return;
+        }
+
+        await AdminService.CreateAiModelAsync(modelId, _newDisplayName);
+        _newModelId = "";
+        _newDisplayName = "";
+        _models = await AdminService.ListAiModelsAsync();
+    }
+
+    private async Task DeleteAsync(Guid id, string name)
+    {
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Удалить модель «{name}» из списка?");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await AdminService.DeleteAiModelAsync(id);
+        _models = await AdminService.ListAiModelsAsync();
+    }
+}

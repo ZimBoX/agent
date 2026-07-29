@@ -69,6 +69,7 @@ public class ChatService(
         string? combinedFileText,
         IReadOnlyList<byte[]>? images,
         string? fileNames,
+        string? modelOverride,
         CancellationToken cancellationToken
     )
     {
@@ -82,7 +83,7 @@ public class ChatService(
             ? text
             : string.IsNullOrEmpty(text) ? $"📎 {fileNames}" : $"{text}\n\n📎 {fileNames}";
 
-        var conversation = await LoadOrCreateAsync(userId, conversationId, displayText, cancellationToken);
+        var conversation = await LoadOrCreateAsync(userId, conversationId, displayText, modelOverride, cancellationToken);
 
         // Собираем историю в формат SDK ДО добавления нового сообщения в БД, затем
         // дописываем текущую реплику пользователя (с файлами, если приложены).
@@ -162,6 +163,7 @@ public class ChatService(
         Guid userId,
         Guid? conversationId,
         string firstText,
+        string? modelOverride,
         CancellationToken cancellationToken
     )
     {
@@ -181,7 +183,7 @@ public class ChatService(
             Id = Guid.NewGuid(),
             UserId = userId,
             Title = BuildTitle(firstText),
-            Model = Model,
+            Model = string.IsNullOrWhiteSpace(modelOverride) ? Model : modelOverride,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

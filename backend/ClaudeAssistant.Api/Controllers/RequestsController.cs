@@ -138,6 +138,9 @@ public class RequestsController(
         [FromForm] Guid? templateId,
         [FromForm] string? customPrompt,
         [FromForm] string? objectFolder,
+        // Необязательный override модели — только для админа (тест цена/качество),
+        // остальным игнорируется. Клиент шлёт выбранное в селекторе значение.
+        [FromForm(Name = "model")] string? modelOverride,
         List<IFormFile> files,
         // ASP.NET привязывает CancellationToken к HttpContext.RequestAborted: когда
         // пользователь жмёт «Прервать», клиент обрывает HTTP-запрос → токен
@@ -172,6 +175,19 @@ public class RequestsController(
         }
 
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+        // Админ может протестировать другую модель, прислав model в форме. Принимаем
+        // ТОЛЬКО от админа (роль с IsAdmin) и ТОЛЬКО из управляемого списка моделей —
+        // иначе игнорируем и оставляем модель шаблона / дефолт своего промпта.
+        if (!string.IsNullOrWhiteSpace(modelOverride))
+        {
+            var requesterRole = User.FindFirstValue(ClaimTypes.Role);
+            var isAdmin = requesterRole is not null && await db.Roles.AnyAsync(r => r.Name == requesterRole && r.IsAdmin);
+            if (isAdmin && await db.AiModels.AnyAsync(m => m.ModelId == modelOverride))
+            {
+                model = modelOverride;
+            }
+        }
 
         // Поиск по объекту доступен у шаблонов с AllowFileSearch, а также всегда —
         // у свободного промпта (template здесь null именно в этом случае, ветки
