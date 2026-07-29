@@ -48,6 +48,7 @@ public class ChatCompletionService(
     ConversationStore conversationStore,
     DocumentGenerationService documentGeneration,
     DrawingRenderService drawingRender,
+    ToolImageDebugService toolImageDebug,
     ILogger<ChatCompletionService> logger
 )
 {
@@ -618,6 +619,7 @@ public class ChatCompletionService(
                     }
 
                     var images = extraction.Images;
+                    toolImageDebug.Dump(userId, "read_document", Path.GetFileNameWithoutExtension(path), images);
                     var imageParts = new List<Block>
                     {
                         new TextBlockParam { Text = $"Файл — скан без текстового слоя, {images.Count} стр. приложены как изображения:" },
@@ -668,6 +670,7 @@ public class ChatCompletionService(
                         fromElement.TryGetInt32(out overviewFrom);
                     }
                     var overview = drawingRender.RenderMontages(pdfPath, Math.Max(1, overviewFrom));
+                    toolImageDebug.Dump(userId, "document_overview", $"{Path.GetFileNameWithoutExtension(pdfPath)}_p{overview.FromPage}-{overview.LastPageShown}", overview.Montages);
                     var rangeNote = overview.LastPageShown < overview.TotalPages || overview.FromPage > 1
                         ? $" Показаны листы {overview.FromPage}–{overview.LastPageShown} из {overview.TotalPages}. Чтобы посмотреть следующие — вызови document_overview с from={overview.LastPageShown + 1}."
                         : "";
@@ -705,6 +708,8 @@ public class ChatCompletionService(
                     }
                     var region = TryParseRegion(toolUse.Input);
                     var png = drawingRender.RenderPage(pdfPath, page, region);
+                    var regionTag = region is { } rgn ? $"_x{rgn.X:0.##}y{rgn.Y:0.##}w{rgn.Width:0.##}h{rgn.Height:0.##}" : "_full";
+                    toolImageDebug.Dump(userId, "render_page", $"{Path.GetFileNameWithoutExtension(pdfPath)}_p{page}{regionTag}", new[] { png });
                     var label = region is { } rg
                         ? $"Лист {page}, вырезка x={rg.X:0.##} y={rg.Y:0.##} w={rg.Width:0.##} h={rg.Height:0.##} (высокое разрешение):"
                         : $"Лист {page} целиком (для поиска таблицы; чтобы прочитать мелкие цифры — запроси region с долей листа):";

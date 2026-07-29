@@ -105,6 +105,9 @@ builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.DrawingR
 // читаются инструментами (по частям + зум) вместо инлайна; фоновый свип чистит их.
 builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.AttachedFilesSandboxService>();
 builder.Services.AddHostedService<ClaudeAssistant.Api.Services.ProjectFiles.AttachedFilesCleanupService>();
+// Отладочный дамп картинок, которые инструменты шлют модели (флаг Debug:DumpToolImages).
+builder.Services.AddSingleton<ClaudeAssistant.Api.Services.ProjectFiles.ToolImageDebugService>();
+builder.Services.AddDirectoryBrowser();
 // Продолжаемые диалоги живут в памяти (окно = TTL кэша Anthropic, 1 час) —
 // стор Singleton, чтобы состояние переживало отдельные HTTP-запросы.
 builder.Services.AddMemoryCache();
@@ -164,6 +167,24 @@ app.UseStaticFiles(
         ContentTypeProvider = releasesContentTypes,
     }
 );
+
+// Отладка: если включён Debug:DumpToolImages, отдаём папку дампа по /tool-debug
+// с листингом — можно открыть в браузере и увидеть ровно те картинки, что уходят
+// модели (превью/вырезки чертежей, скан-страницы). LAN-only, включается флагом.
+{
+    var toolDebug = app.Services.GetRequiredService<ClaudeAssistant.Api.Services.ProjectFiles.ToolImageDebugService>();
+    if (toolDebug.Enabled)
+    {
+        Directory.CreateDirectory(toolDebug.Dir);
+        var toolDebugProvider = new PhysicalFileProvider(toolDebug.Dir);
+        app.UseStaticFiles(
+            new StaticFileOptions { FileProvider = toolDebugProvider, RequestPath = "/tool-debug" }
+        );
+        app.UseDirectoryBrowser(
+            new DirectoryBrowserOptions { FileProvider = toolDebugProvider, RequestPath = "/tool-debug" }
+        );
+    }
+}
 
 app.MapControllers();
 app.MapHub<UpdatesHub>("/hubs/updates");

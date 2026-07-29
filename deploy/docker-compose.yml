@@ -60,6 +60,11 @@ services:
       # раскладываются сюда и читаются моделью инструментами (по частям + зум) вместо
       # инлайна. Свежие чистятся фоновым свипом (см. AttachedFilesCleanupService).
       AttachedFiles__CacheDir: /app/attached-cache
+      # ОТЛАДКА (временно): дублировать картинки, которые инструменты шлют модели,
+      # в /app/tool-image-debug и отдавать их листингом по /tool-debug — «увидеть
+      # глазами модели». Выключить: убрать эти две строки (или "false").
+      Debug__DumpToolImages: "true"
+      Debug__DumpDir: /app/tool-image-debug
     ports:
       - "5149:5149"
     volumes:
@@ -71,6 +76,8 @@ services:
       # Временная песочница вложений (эфемерна, чистится свипом; том — чтобы диск
       # контейнера не пух и переживать пересоздание в пределах ретеншена).
       - attached_cache:/app/attached-cache
+      # Отладочный дамп картинок инструментов (см. Debug__DumpToolImages).
+      - tool_debug:/app/tool-image-debug
       # Файловые логи Serilog (LocalApplicationData у root внутри контейнера).
       - backend_logs:/root/.local/share/ClaudeAssistant/backend-logs
       # Шара с папками объектов (смонтирована на хосте, см. deploy/README раздел 6),
@@ -82,4 +89,5 @@ volumes:
   releases_data:
   render_cache:
   attached_cache:
+  tool_debug:
   backend_logs:
