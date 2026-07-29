@@ -597,14 +597,10 @@ public class ChatCompletionService(
             var path = "";
             if (toolUse.Input.TryGetValue("path", out var pathElement))
             {
-                path = pathElement.GetString() ?? "";
+                path = pathElement.ValueKind == JsonValueKind.String ? pathElement.GetString() ?? "" : pathElement.ToString();
             }
 
-            var offset = 0;
-            if (toolUse.Input.TryGetValue("offset", out var offsetElement) && offsetElement.ValueKind == JsonValueKind.Number)
-            {
-                offsetElement.TryGetInt32(out offset);
-            }
+            var offset = ReadToolInt(toolUse.Input, "offset", 0);
 
             switch (toolUse.Name)
             {
@@ -693,11 +689,7 @@ public class ChatCompletionService(
                     {
                         accessedFiles.Add(path);
                     }
-                    var overviewFrom = 1;
-                    if (toolUse.Input.TryGetValue("from", out var fromElement) && fromElement.ValueKind == JsonValueKind.Number)
-                    {
-                        fromElement.TryGetInt32(out overviewFrom);
-                    }
+                    var overviewFrom = ReadToolInt(toolUse.Input, "from", 1);
                     var overview = drawingRender.RenderMontages(pdfPath, Math.Max(1, overviewFrom));
                     toolImageDebug.Dump(userId, "document_overview", $"{Path.GetFileNameWithoutExtension(pdfPath)}_p{overview.FromPage}-{overview.LastPageShown}", overview.Montages);
                     var rangeNote = overview.LastPageShown < overview.TotalPages || overview.FromPage > 1
@@ -730,11 +722,7 @@ public class ChatCompletionService(
                     {
                         accessedFiles.Add(path);
                     }
-                    var page = 1;
-                    if (toolUse.Input.TryGetValue("page", out var pageElement) && pageElement.ValueKind == JsonValueKind.Number)
-                    {
-                        pageElement.TryGetInt32(out page);
-                    }
+                    var page = ReadToolInt(toolUse.Input, "page", 1);
                     var region = TryParseRegion(toolUse.Input);
                     var png = drawingRender.RenderPage(pdfPath, page, region);
                     var regionTag = region is { } rgn ? $"_x{rgn.X:0.##}y{rgn.Y:0.##}w{rgn.Width:0.##}h{rgn.Height:0.##}" : "_full";
@@ -887,15 +875,94 @@ public class ChatCompletionService(
         };
 
     // Разбирает region из входа render_page: {x,y,width,height} в долях 0..1.
+    // Читает целочисленный tool-аргумент, устойчиво к тому, что модель прислала его
+    // СТРОКОЙ, а не числом. Критично для qwen (и вообще OpenAI-совместимых через
+    // агрегатор): она сериализует tool-инпуты строками — page="6", offset="20000".
+    // Раньше проверка ValueKind==Number молча роняла такие значения в дефолт (page→1
+    // и т.п.), из-за чего рендерился не тот лист / игнорировался offset.
+    private static int ReadToolInt(IReadOnlyDictionary<string, JsonElement> input, string key, int fallback)
+    {
+        if (!input.TryGetValue(key, out var e))
+        {
+            return fallback;
+        }
+        if (e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var n))
+        {
+            return n;
+        }
+        if (e.ValueKind == JsonValueKind.String && int.TryParse(e.GetString(), out var s))
+        {
+            return s;
+        }
+        return fallback;
+    }
+
+    // region модель может прислать ОБЪЕКТОМ {x,y,width,height} ИЛИ СТРОКОЙ с JSON
+    // внутри ("{\"x\":0,...}") — так делает qwen. Раньше принимался только объект,
+    // из-за чего строковый region молча игнорировался и вырезка не делалась (лист
+    // рендерился целиком — «модель не кропает»). Координаты внутри тоже допускаем
+    // строками.
     private static PageRegion? TryParseRegion(IReadOnlyDictionary<string, JsonElement> input)
     {
-        if (!input.TryGetValue("region", out var r) || r.ValueKind != JsonValueKind.Object)
+        if (!input.TryGetValue("region", out var r))
         {
             return null;
         }
-        float Coord(string key) => r.TryGetProperty(key, out var e) && e.ValueKind == JsonValueKind.Number ? (float)e.GetDouble() : 0f;
-        var region = new PageRegion(Coord("x"), Coord("y"), Coord("width"), Coord("height"));
-        return region.Width <= 0 || region.Height <= 0 ? null : region;
+
+        JsonDocument? parsed = null;
+        try
+        {
+            JsonElement obj;
+            if (r.ValueKind == JsonValueKind.Object)
+            {
+                obj = r;
+            }
+            else if (r.ValueKind == JsonValueKind.String)
+            {
+                var s = r.GetString();
+                if (string.IsNullOrWhiteSpace(s))
+                {
+                    return null;
+                }
+                parsed = JsonDocument.Parse(s);
+                obj = parsed.RootElement;
+                if (obj.ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+            }
+            else
+            {
+                return null;
+            }
+
+            float Coord(string key)
+            {
+                if (!obj.TryGetProperty(key, out var e))
+                {
+                    return 0f;
+                }
+                if (e.ValueKind == JsonValueKind.Number)
+                {
+                    return (float)e.GetDouble();
+                }
+                return e.ValueKind == JsonValueKind.String
+                    && float.TryParse(e.GetString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var f)
+                    ? f
+                    : 0f;
+            }
+
+            var region = new PageRegion(Coord("x"), Coord("y"), Coord("width"), Coord("height"));
+            return region.Width <= 0 || region.Height <= 0 ? null : region;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        finally
+        {
+            parsed?.Dispose();
+        }
     }
 
     // Готовит "страницу" текста документа начиная с offset и сообщение о том, как
