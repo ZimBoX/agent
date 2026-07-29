@@ -261,6 +261,7 @@ public class ChatCompletionService(
         [
             new WebSearchTool20250305 { MaxUses = MaxWebSearchUses },
             DocumentGenerationService.BuildCreateFileTool(),
+            ToolHelp.BuildTool(),
         ];
         if (sandboxRoot is not null)
         {
@@ -585,8 +586,14 @@ public class ChatCompletionService(
         int totalToolImagesSoFar
     )
     {
-        // create_file не зависит от папки-объекта — обрабатываем до всего, что
-        // требует sandboxRoot.
+        // help и create_file не зависят от папки-объекта — обрабатываем до всего,
+        // что требует sandboxRoot.
+        if (toolUse.Name == "help")
+        {
+            var topic = toolUse.Input.TryGetValue("tool", out var te) && te.ValueKind == JsonValueKind.String ? te.GetString() : null;
+            return (TextResultNative(ToolHelp.Text(topic)), 0, 0);
+        }
+
         if (toolUse.Name == "create_file")
         {
             return (GenerateFileResultNative(toolUse, userId, generatedFiles), 0, 0);
@@ -1015,7 +1022,12 @@ public class ChatCompletionService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Не удалось сгенерировать файл через create_file");
-            return TextResultNative($"Не удалось создать файл: {ex.Message}. Проверь входные данные (format, filename, sheets/markdown) и попробуй ещё раз.");
+            return TextResultNative(
+                $"Не удалось создать файл: {ex.Message}\n"
+                + "НЕ повторяй тот же вызов вслепую. Проверь схему: для xlsx нужен sheets — JSON-массив листов "
+                + "[{\"name\":\"Лист\",\"rows\":[[\"Заголовок1\",\"Заголовок2\"],[\"знач\",\"знач\"]]}] (именно массив, НЕ строка с JSON внутри); для docx — поле markdown. "
+                + "Если не уверен в формате — вызови инструмент help с tool=\"create_file\" и следуй примеру."
+            );
         }
     }
 

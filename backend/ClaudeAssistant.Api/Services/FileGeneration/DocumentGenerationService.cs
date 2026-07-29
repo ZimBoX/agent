@@ -94,63 +94,120 @@ public partial class DocumentGenerationService
 
     private static byte[] GenerateXlsx(IReadOnlyDictionary<string, JsonElement> input, string baseName)
     {
-        if (!input.TryGetValue("sheets", out var sheetsEl) || sheetsEl.ValueKind != JsonValueKind.Array || sheetsEl.GetArrayLength() == 0)
+        // qwen и другие OpenAI-совместимые модели через агрегатор часто присылают
+        // вложенные аргументы СТРОКАМИ (JSON внутри строки), а не массивами — из-за
+        // этого раньше create_file падал на «нужен массив sheets» и модель уходила в
+        // цикл повторов. Принимаем и массив, и строку-JSON на всех уровнях (sheets,
+        // rows, каждая строка). keep держит распарсенные документы живыми.
+        var keep = new List<JsonDocument>();
+        try
         {
-            throw new InvalidOperationException("Для xlsx нужно передать непустой массив sheets с строками (rows).");
-        }
-
-        using var workbook = new XLWorkbook();
-        var sheetIndex = 0;
-        foreach (var sheetEl in sheetsEl.EnumerateArray())
-        {
-            sheetIndex++;
-            var sheetName = sheetEl.TryGetProperty("name", out var nameEl) && nameEl.ValueKind == JsonValueKind.String
-                ? SanitizeSheetName(nameEl.GetString(), sheetIndex)
-                : $"Лист{sheetIndex}";
-            var ws = workbook.Worksheets.Add(sheetName);
-
-            if (!sheetEl.TryGetProperty("rows", out var rowsEl) || rowsEl.ValueKind != JsonValueKind.Array)
+            var sheetsEl = CoerceJsonArray(input.TryGetValue("sheets", out var se) ? se : default, keep);
+            if (sheetsEl.ValueKind != JsonValueKind.Array || sheetsEl.GetArrayLength() == 0)
             {
-                continue;
+                throw new InvalidOperationException("Для xlsx нужен непустой массив sheets, каждый лист — {name?, rows:[[...]]}.");
             }
 
-            var r = 0;
-            foreach (var rowEl in rowsEl.EnumerateArray())
+            using var workbook = new XLWorkbook();
+            var sheetIndex = 0;
+            foreach (var sheetEl in sheetsEl.EnumerateArray())
             {
-                if (rowEl.ValueKind != JsonValueKind.Array)
+                sheetIndex++;
+                var sheetName = sheetEl.ValueKind == JsonValueKind.Object
+                    && sheetEl.TryGetProperty("name", out var nameEl)
+                    && nameEl.ValueKind == JsonValueKind.String
+                    ? SanitizeSheetName(nameEl.GetString(), sheetIndex)
+                    : $"Лист{sheetIndex}";
+                var ws = workbook.Worksheets.Add(sheetName);
+
+                // rows — из свойства объекта; допускаем и случай, когда сам лист уже
+                // является массивом строк (модель прислала sheets как [[...],[...]]).
+                var rowsEl = sheetEl.ValueKind == JsonValueKind.Object && sheetEl.TryGetProperty("rows", out var rp)
+                    ? CoerceJsonArray(rp, keep)
+                    : sheetEl.ValueKind == JsonValueKind.Array
+                        ? sheetEl
+                        : CoerceJsonArray(sheetEl, keep);
+                if (rowsEl.ValueKind != JsonValueKind.Array)
                 {
                     continue;
                 }
-                r++;
-                var c = 0;
-                foreach (var cellEl in rowEl.EnumerateArray())
+
+                var r = 0;
+                foreach (var rowRaw in rowsEl.EnumerateArray())
                 {
-                    c++;
-                    var cell = ws.Cell(r, c);
-                    // Числа/даты набираем типизированно, чтобы Excel считал по ним и
-                    // выравнивал вправо; иначе — как текст.
-                    var raw = CellToString(cellEl);
-                    if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
+                    var rowEl = CoerceJsonArray(rowRaw, keep);
+                    if (rowEl.ValueKind != JsonValueKind.Array)
                     {
-                        cell.Value = num;
+                        continue;
                     }
-                    else
+                    r++;
+                    var c = 0;
+                    foreach (var cellEl in rowEl.EnumerateArray())
                     {
-                        cell.Value = raw;
+                        c++;
+                        var cell = ws.Cell(r, c);
+                        // Числа/даты набираем типизированно, чтобы Excel считал по ним и
+                        // выравнивал вправо; иначе — как текст.
+                        var raw = CellToString(cellEl);
+                        if (double.TryParse(raw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var num))
+                        {
+                            cell.Value = num;
+                        }
+                        else
+                        {
+                            cell.Value = raw;
+                        }
                     }
+                }
+
+                if (r > 0)
+                {
+                    ws.Row(1).Style.Font.Bold = true;
+                    ws.Columns().AdjustToContents();
                 }
             }
 
-            if (r > 0)
+            using var ms = new MemoryStream();
+            workbook.SaveAs(ms);
+            return ms.ToArray();
+        }
+        finally
+        {
+            foreach (var d in keep)
             {
-                ws.Row(1).Style.Font.Bold = true;
-                ws.Columns().AdjustToContents();
+                d.Dispose();
             }
         }
+    }
 
-        using var ms = new MemoryStream();
-        workbook.SaveAs(ms);
-        return ms.ToArray();
+    // Возвращает JsonElement-массив: если уже массив — как есть; если строка с JSON
+    // внутри (частый случай у qwen/OpenAI-совместимых) — парсит её; иначе default
+    // (ValueKind=Undefined). Распарсенный документ кладём в keep, чтобы элемент не
+    // «протух» (JsonElement ссылается на живой JsonDocument).
+    private static JsonElement CoerceJsonArray(JsonElement el, List<JsonDocument> keep)
+    {
+        if (el.ValueKind == JsonValueKind.Array)
+        {
+            return el;
+        }
+        if (el.ValueKind == JsonValueKind.String)
+        {
+            var s = el.GetString();
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                try
+                {
+                    var doc = JsonDocument.Parse(s);
+                    keep.Add(doc);
+                    return doc.RootElement;
+                }
+                catch (JsonException)
+                {
+                    // не JSON — вернём default ниже
+                }
+            }
+        }
+        return default;
     }
 
     private static string CellToString(JsonElement cell) =>

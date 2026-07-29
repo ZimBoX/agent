@@ -223,6 +223,7 @@ public class ChatService(
         [
             new WebSearchTool20250305 { MaxUses = MaxWebSearchUses },
             DocumentGenerationService.BuildCreateFileTool(),
+            ClaudeAssistant.Api.Services.AiCompletion.ToolHelp.BuildTool(),
         ];
         var generatedFiles = new List<GeneratedFileData>();
         var usage = TokenUsage.Empty;
@@ -479,6 +480,11 @@ public class ChatService(
     // в generatedFiles — сохранит их SendAsync с привязкой к сообщению чата.
     private string ExecuteCreateFile(ChatToolCall call, List<GeneratedFileData> generatedFiles)
     {
+        if (call.Name == "help")
+        {
+            var topic = call.Input.TryGetValue("tool", out var te) && te.ValueKind == JsonValueKind.String ? te.GetString() : null;
+            return ClaudeAssistant.Api.Services.AiCompletion.ToolHelp.Text(topic);
+        }
         if (call.Name != "create_file")
         {
             return $"Неизвестный инструмент: {call.Name}";
@@ -492,7 +498,7 @@ public class ChatService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Не удалось сгенерировать файл через create_file (чат)");
-            return $"Не удалось создать файл: {ex.Message}. Проверь входные данные и попробуй ещё раз.";
+            return $"Не удалось создать файл: {ex.Message}. Схема xlsx: sheets=[{{\"rows\":[[\"Заголовок\"],[\"значение\"]]}}] (массив, не строка). Не уверен — вызови help с tool=\"create_file\".";
         }
     }
 
