@@ -11,12 +11,20 @@ public class ConversationState
 {
     public required string Model { get; init; }
 
+    // true — диалог идёт по OpenAI-совместимому пути (тогда история в OpenAiMessages,
+    // а SystemBlocks/Messages пустые). false — нативный Anthropic путь.
+    public bool UseOpenAiWire { get; init; }
+
     // System-блоки уже с cache_control (1h) — один и тот же префикс на весь диалог.
     public required List<TextBlockParam> SystemBlocks { get; init; }
 
     // Растущая история: user/assistant/tool-результаты. Прочитанные документы
     // лежат здесь как tool-результаты и переиспользуются из кэша на follow-up'ах.
     public required List<MessageParam> Messages { get; init; }
+
+    // История OpenAI-пути (role/content/tool_calls как словари) — первый элемент
+    // system-сообщение. Растёт на follow-up'ах, как и Messages у нативного пути.
+    public List<object>? OpenAiMessages { get; set; }
 
     // Папка-объект для поиска по файлам (tool-loop). null — режим прикреплённых
     // файлов (текст документа уже в SystemBlocks, инструменты не нужны).

@@ -42,7 +42,7 @@ public class ConversationNotFoundException() : Exception("Диалог не на
 // это Aggregator:UseNativeSdk=false (можно через переменную окружения
 // Aggregator__UseNativeSdk, без пересборки) и рестарт процесса, а не git revert
 // и повторный деплой.
-public class ChatCompletionService(
+public partial class ChatCompletionService(
     IConfiguration configuration,
     SandboxedFileAccessService fileAccess,
     ConversationStore conversationStore,
@@ -145,9 +145,32 @@ public class ChatCompletionService(
         Guid userId,
         IReadOnlyList<byte[]>? images = null,
         IProgress<string>? status = null,
+        bool useOpenAiWire = false,
         CancellationToken cancellationToken = default
     )
     {
+        // OpenAI-совместимый путь (все модели, кроме claude — см. AiModel.UseAnthropicWire).
+        if (useOpenAiWire)
+        {
+            var oaMessages = BuildInitialOpenAiMessages(systemPrompt, sandboxRoot is not null, userText, images);
+            var oaResult = await RunTurnOpenAi(model, oaMessages, sandboxRoot, userId, status, cancellationToken);
+            var oaConversationId = Guid.NewGuid();
+            conversationStore.Save(
+                oaConversationId,
+                new ConversationState
+                {
+                    Model = model,
+                    UseOpenAiWire = true,
+                    SystemBlocks = [],
+                    Messages = [],
+                    OpenAiMessages = oaMessages,
+                    SandboxRoot = sandboxRoot,
+                    UserId = userId,
+                }
+            );
+            return (oaResult, oaConversationId);
+        }
+
         if (!UseNativeSdk)
         {
             var legacy = sandboxRoot is not null
@@ -193,17 +216,26 @@ public class ChatCompletionService(
         CancellationToken cancellationToken = default
     )
     {
-        // Продолжение — только на нативном пути (кэш). Если рантайм переключили на
-        // legacy между стартом и продолжением, диалог считаем недоступным.
-        var state = UseNativeSdk ? conversationStore.Get(conversationId) : null;
-        if (state is null || state.UserId != userId)
+        var state = conversationStore.Get(conversationId);
+        if (state is null || state.UserId != userId || (!UseNativeSdk && !state.UseOpenAiWire))
         {
             throw new ConversationNotFoundException();
         }
 
         // Прикреплённые к follow-up файлы: их извлечённый текст дописываем к вопросу,
-        // сканы (без текстового слоя) уходят изображениями (см. BuildUserContentNative).
+        // сканы (без текстового слоя) уходят изображениями.
         var userText = string.IsNullOrEmpty(combinedFileText) ? followupText : $"{followupText}\n\n{combinedFileText}";
+
+        // OpenAI-путь: дописываем user-сообщение в его историю и гоняем тот же цикл.
+        if (state.UseOpenAiWire)
+        {
+            state.OpenAiMessages ??= [];
+            state.OpenAiMessages.Add(OpenAiUserMessage(userText, images));
+            var oaResult = await RunTurnOpenAi(state.Model, state.OpenAiMessages, state.SandboxRoot, userId, status, cancellationToken);
+            conversationStore.Save(conversationId, state);
+            return oaResult;
+        }
+
         state.Messages.Add(
             new MessageParam { Role = Role.User, Content = BuildUserContentNative(userText, images) }
         );
@@ -355,8 +387,9 @@ public class ChatCompletionService(
 
                     status?.Report(DescribeToolActivity(toolUse));
 
-                    var (content, addedChars, addedImages) = await ExecuteToolAsyncNative(
-                        toolUse,
+                    var exec = await ExecuteToolAsync(
+                        toolUse.Name,
+                        toolUse.Input,
                         sandboxRoot,
                         userId,
                         accessedFiles,
@@ -364,9 +397,17 @@ public class ChatCompletionService(
                         totalDocumentChars,
                         totalToolImages
                     );
-                    totalDocumentChars += addedChars;
-                    totalToolImages += addedImages;
+                    totalDocumentChars += exec.AddedChars;
+                    totalToolImages += exec.AddedImages;
 
+                    // Anthropic: текст + картинки — в одном tool_result.
+                    var content = new List<Block> { new TextBlockParam { Text = exec.Text } };
+                    content.AddRange(
+                        exec.Images.Select(img => (Block)new ImageBlockParam
+                        {
+                            Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(img), Data = Convert.ToBase64String(img) },
+                        })
+                    );
                     toolResults.Add(new ToolResultBlockParam { ToolUseID = toolUse.ID, Content = content });
                 }
             }
@@ -576,8 +617,21 @@ public class ChatCompletionService(
             response.Usage.OutputTokens
         );
 
-    private async Task<(List<Block> Content, int AddedChars, int AddedImages)> ExecuteToolAsyncNative(
-        ToolUseBlock toolUse,
+    // Формат-нейтральный результат исполнения инструмента: текст + (опц.) картинки.
+    // Оба пути (нативный Anthropic и OpenAI) упаковывают его в свой wire-формат:
+    // Anthropic — text+image блоки в одном tool_result; OpenAI — текст в role:tool,
+    // картинки отдельным user-сообщением (в tool-ответ OpenAI картинки не кладутся).
+    private sealed record ToolExecResult(string Text, IReadOnlyList<byte[]> Images, int AddedChars, int AddedImages)
+    {
+        public static ToolExecResult Say(string text, int addedChars = 0) => new(text, [], addedChars, 0);
+    }
+
+    // Единый исполнитель инструментов, не зависящий от wire-формата. Принимает имя
+    // и словарь аргументов (для OpenAI arguments — JSON-строку парсим в такой же
+    // словарь), возвращает ToolExecResult.
+    private async Task<ToolExecResult> ExecuteToolAsync(
+        string toolName,
+        IReadOnlyDictionary<string, JsonElement> input,
         string? sandboxRoot,
         Guid userId,
         List<string> accessedFiles,
@@ -588,42 +642,38 @@ public class ChatCompletionService(
     {
         // help и create_file не зависят от папки-объекта — обрабатываем до всего,
         // что требует sandboxRoot.
-        if (toolUse.Name == "help")
+        if (toolName == "help")
         {
-            var topic = toolUse.Input.TryGetValue("tool", out var te) && te.ValueKind == JsonValueKind.String ? te.GetString() : null;
-            return (TextResultNative(ToolHelp.Text(topic)), 0, 0);
+            var topic = input.TryGetValue("tool", out var te) && te.ValueKind == JsonValueKind.String ? te.GetString() : null;
+            return ToolExecResult.Say(ToolHelp.Text(topic));
         }
 
-        if (toolUse.Name == "create_file")
+        if (toolName == "create_file")
         {
-            return (GenerateFileResultNative(toolUse, userId, generatedFiles), 0, 0);
+            return ToolExecResult.Say(GenerateFileResultText(input, generatedFiles));
         }
 
         try
         {
             var path = "";
-            if (toolUse.Input.TryGetValue("path", out var pathElement))
+            if (input.TryGetValue("path", out var pathElement))
             {
                 path = pathElement.ValueKind == JsonValueKind.String ? pathElement.GetString() ?? "" : pathElement.ToString();
             }
 
-            var offset = ReadToolInt(toolUse.Input, "offset", 0);
+            var offset = ReadToolInt(input, "offset", 0);
 
-            switch (toolUse.Name)
+            switch (toolName)
             {
                 case "list_files":
                     var entries = fileAccess.ListFiles(sandboxRoot!, path, userId);
-                    return (TextResultNative(entries.Count > 0 ? string.Join("\n", entries) : "(папка пуста)"), 0, 0);
+                    return ToolExecResult.Say(entries.Count > 0 ? string.Join("\n", entries) : "(папка пуста)");
 
                 case "read_document":
                     if (totalDocumentCharsSoFar >= MaxTotalDocumentChars)
                     {
-                        return (
-                            TextResultNative(
-                                "Достигнут суммарный лимит объёма прочитанных документов для одного запроса. Дальнейшие файлы не читаются — сформулируй ответ по уже прочитанным документам, при необходимости уточни у пользователя, что именно посмотреть отдельно."
-                            ),
-                            0,
-                            0
+                        return ToolExecResult.Say(
+                            "Достигнут суммарный лимит объёма прочитанных документов для одного запроса. Дальнейшие файлы не читаются — сформулируй ответ по уже прочитанным документам, при необходимости уточни у пользователя, что именно посмотреть отдельно."
                         );
                     }
 
@@ -636,33 +686,19 @@ public class ChatCompletionService(
                     if (extraction.Text is not null)
                     {
                         var (pageText, addedChars) = BuildPaginatedDocumentText(extraction.Text, offset);
-                        return (TextResultNative(pageText), addedChars, 0);
+                        return ToolExecResult.Say(pageText, addedChars);
                     }
 
                     if (totalToolImagesSoFar >= MaxTotalToolImages)
                     {
-                        return (
-                            TextResultNative(
-                                "Достигнут суммарный лимит числа страниц-сканов для одного запроса. Этот файл (скан без текстового слоя) не читается — сформулируй ответ по уже прочитанным документам."
-                            ),
-                            0,
-                            0
+                        return ToolExecResult.Say(
+                            "Достигнут суммарный лимит числа страниц-сканов для одного запроса. Этот файл (скан без текстового слоя) не читается — сформулируй ответ по уже прочитанным документам."
                         );
                     }
 
                     var images = extraction.Images;
                     toolImageDebug.Dump(userId, "read_document", Path.GetFileNameWithoutExtension(path), images);
-                    var imageParts = new List<Block>
-                    {
-                        new TextBlockParam { Text = $"Файл — скан без текстового слоя, {images.Count} стр. приложены как изображения:" },
-                    };
-                    imageParts.AddRange(
-                        images.Select(img => (Block)new ImageBlockParam
-                        {
-                            Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(img), Data = Convert.ToBase64String(img) },
-                        })
-                    );
-                    return (imageParts, 0, images.Count);
+                    return new ToolExecResult($"Файл — скан без текстового слоя, {images.Count} стр. приложены как изображения:", images, 0, images.Count);
 
                 case "search_document":
                 {
@@ -671,94 +707,74 @@ public class ChatCompletionService(
                     {
                         accessedFiles.Add(path);
                     }
-                    var query = toolUse.Input.TryGetValue("query", out var queryElement) ? queryElement.GetString() ?? "" : "";
+                    var query = input.TryGetValue("query", out var queryElement) ? queryElement.GetString() ?? "" : "";
                     if (!drawingRender.HasTextLayer(pdfPath))
                     {
-                        return (TextResultNative("У этого PDF нет текстового слоя (это скан). Используй document_overview, чтобы увидеть все листы, и render_page — чтобы прочитать таблицы."), 0, 0);
+                        return ToolExecResult.Say("У этого PDF нет текстового слоя (это скан). Используй document_overview, чтобы увидеть все листы, и render_page — чтобы прочитать таблицы.");
                     }
                     var hits = drawingRender.SearchText(pdfPath, query);
                     if (hits.Count == 0)
                     {
-                        return (TextResultNative($"«{query}» не найдено в текстовом слое. Попробуй другой запрос или посмотри листы через document_overview."), 0, 0);
+                        return ToolExecResult.Say($"«{query}» не найдено в текстовом слое. Попробуй другой запрос или посмотри листы через document_overview.");
                     }
                     var found = "Найдено на листах (открой нужный через render_page):\n" + string.Join("\n", hits.Select(h => $"— лист {h.Page}: {h.Snippet}"));
-                    return (TextResultNative(found), 0, 0);
+                    return ToolExecResult.Say(found);
                 }
 
                 case "document_overview":
                 {
                     if (totalToolImagesSoFar >= MaxTotalToolImages)
                     {
-                        return (TextResultNative("Достигнут лимит изображений за запрос — новые листы не рендерятся. Сформулируй ответ по уже увиденному."), 0, 0);
+                        return ToolExecResult.Say("Достигнут лимит изображений за запрос — новые листы не рендерятся. Сформулируй ответ по уже увиденному.");
                     }
                     var pdfPath = fileAccess.ResolvePdfForRender(sandboxRoot!, path, userId);
                     if (!accessedFiles.Contains(path))
                     {
                         accessedFiles.Add(path);
                     }
-                    var overviewFrom = ReadToolInt(toolUse.Input, "from", 1);
+                    var overviewFrom = ReadToolInt(input, "from", 1);
                     var overview = drawingRender.RenderMontages(pdfPath, Math.Max(1, overviewFrom));
                     toolImageDebug.Dump(userId, "document_overview", $"{Path.GetFileNameWithoutExtension(pdfPath)}_p{overview.FromPage}-{overview.LastPageShown}", overview.Montages);
                     var rangeNote = overview.LastPageShown < overview.TotalPages || overview.FromPage > 1
                         ? $" Показаны листы {overview.FromPage}–{overview.LastPageShown} из {overview.TotalPages}. Чтобы посмотреть следующие — вызови document_overview с from={overview.LastPageShown + 1}."
                         : "";
-                    var overviewBlocks = new List<Block>
-                    {
-                        new TextBlockParam
-                        {
-                            Text = $"Файл «{Path.GetFileName(pdfPath)}» — {overview.TotalPages} лист(ов).{rangeNote} Ниже превью листов с номерами. Найди листы с нужными таблицами (ведомости объёмов, спецификации) и открой их через render_page — при необходимости с region (вырезкой таблицы) для читаемых цифр.",
-                        },
-                    };
-                    overviewBlocks.AddRange(
-                        overview.Montages.Select(m => (Block)new ImageBlockParam
-                        {
-                            Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(m), Data = Convert.ToBase64String(m) },
-                        })
-                    );
-                    return (overviewBlocks, 0, overview.Montages.Count);
+                    var overviewText = $"Файл «{Path.GetFileName(pdfPath)}» — {overview.TotalPages} лист(ов).{rangeNote} Ниже превью листов с номерами. Найди листы с нужными таблицами (ведомости объёмов, спецификации) и открой их через render_page — при необходимости с region (вырезкой таблицы) для читаемых цифр.";
+                    return new ToolExecResult(overviewText, overview.Montages, 0, overview.Montages.Count);
                 }
 
                 case "render_page":
                 {
                     if (totalToolImagesSoFar >= MaxTotalToolImages)
                     {
-                        return (TextResultNative("Достигнут лимит изображений за запрос — новые листы не рендерятся."), 0, 0);
+                        return ToolExecResult.Say("Достигнут лимит изображений за запрос — новые листы не рендерятся.");
                     }
                     var pdfPath = fileAccess.ResolvePdfForRender(sandboxRoot!, path, userId);
                     if (!accessedFiles.Contains(path))
                     {
                         accessedFiles.Add(path);
                     }
-                    var page = ReadToolInt(toolUse.Input, "page", 1);
-                    var region = TryParseRegion(toolUse.Input);
+                    var page = ReadToolInt(input, "page", 1);
+                    var region = TryParseRegion(input);
                     var png = drawingRender.RenderPage(pdfPath, page, region);
                     var regionTag = region is { } rgn ? $"_x{rgn.X:0.##}y{rgn.Y:0.##}w{rgn.Width:0.##}h{rgn.Height:0.##}" : "_full";
                     toolImageDebug.Dump(userId, "render_page", $"{Path.GetFileNameWithoutExtension(pdfPath)}_p{page}{regionTag}", new[] { png });
                     var label = region is { } rg
                         ? $"Лист {page}, вырезка x={rg.X:0.##} y={rg.Y:0.##} w={rg.Width:0.##} h={rg.Height:0.##} (высокое разрешение):"
                         : $"Лист {page} целиком (для поиска таблицы; чтобы прочитать мелкие цифры — запроси region с долей листа):";
-                    return (
-                        new List<Block>
-                        {
-                            new TextBlockParam { Text = label },
-                            new ImageBlockParam { Source = new Base64ImageSource { MediaType = SkiaImages.DetectMediaType(png), Data = Convert.ToBase64String(png) } },
-                        },
-                        0,
-                        1
-                    );
+                    return new ToolExecResult(label, new[] { png }, 0, 1);
                 }
 
                 default:
-                    return (TextResultNative($"Неизвестный инструмент: {toolUse.Name}"), 0, 0);
+                    return ToolExecResult.Say($"Неизвестный инструмент: {toolName}");
             }
         }
         catch (PathAccessDeniedException)
         {
-            return (TextResultNative("Доступ запрещён: путь вне разрешённой папки объекта, либо файл не найден/не поддерживается."), 0, 0);
+            return ToolExecResult.Say("Доступ запрещён: путь вне разрешённой папки объекта, либо файл не найден/не поддерживается.");
         }
         catch (Exception ex)
         {
-            return (TextResultNative($"Ошибка при выполнении инструмента: {ex.Message}"), 0, 0);
+            return ToolExecResult.Say($"Ошибка при выполнении инструмента: {ex.Message}");
         }
     }
 
@@ -1005,29 +1021,25 @@ public class ChatCompletionService(
         return (slice + suffix, slice.Length);
     }
 
-    private static List<Block> TextResultNative(string text) => [new TextBlockParam { Text = text }];
-
     // Выполняет create_file: генерирует файл, кладёт в эфемерное хранилище и
     // регистрирует ссылку (её вернёт AgenticCompletionResult). Модели возвращаем
     // короткое подтверждение (без байтов). Ошибку генерации отдаём текстом —
     // модель сможет поправить входные данные и попробовать снова.
-    private List<Block> GenerateFileResultNative(ToolUseBlock toolUse, Guid userId, List<GeneratedFileData> generatedFiles)
+    private string GenerateFileResultText(IReadOnlyDictionary<string, JsonElement> input, List<GeneratedFileData> generatedFiles)
     {
         try
         {
-            var (bytes, fileName, contentType) = documentGeneration.Generate(toolUse.Input);
+            var (bytes, fileName, contentType) = documentGeneration.Generate(input);
             generatedFiles.Add(new GeneratedFileData(Guid.NewGuid(), fileName, contentType, bytes));
-            return TextResultNative($"Файл «{fileName}» успешно создан и приложен к ответу. Кратко подтверди это пользователю.");
+            return $"Файл «{fileName}» успешно создан и приложен к ответу. Кратко подтверди это пользователю.";
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Не удалось сгенерировать файл через create_file");
-            return TextResultNative(
-                $"Не удалось создать файл: {ex.Message}\n"
+            return $"Не удалось создать файл: {ex.Message}\n"
                 + "НЕ повторяй тот же вызов вслепую. Проверь схему: для xlsx нужен sheets — JSON-массив листов "
                 + "[{\"name\":\"Лист\",\"rows\":[[\"Заголовок1\",\"Заголовок2\"],[\"знач\",\"знач\"]]}] (именно массив, НЕ строка с JSON внутри); для docx — поле markdown. "
-                + "Если не уверен в формате — вызови инструмент help с tool=\"create_file\" и следуй примеру."
-            );
+                + "Если не уверен в формате — вызови инструмент help с tool=\"create_file\" и следуй примеру.";
         }
     }
 

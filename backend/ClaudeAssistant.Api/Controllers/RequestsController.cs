@@ -3,6 +3,7 @@ using ClaudeAssistant.Api.Data;
 using ClaudeAssistant.Api.Dtos;
 using ClaudeAssistant.Api.Hubs;
 using ClaudeAssistant.Api.Models;
+using ClaudeAssistant.Api.Services;
 using ClaudeAssistant.Api.Services.AiCompletion;
 using ClaudeAssistant.Api.Services.FileGeneration;
 using ClaudeAssistant.Api.Services.FileTextExtraction;
@@ -23,6 +24,7 @@ public class RequestsController(
     ChatCompletionService chatCompletionService,
     SandboxedFileAccessService fileAccess,
     AttachedFilesSandboxService attachedSandbox,
+    AdminService adminService,
     ConversationStore conversationStore,
     IHubContext<UpdatesHub> hub,
     ILogger<RequestsController> logger
@@ -285,6 +287,9 @@ public class RequestsController(
             // sandboxRoot != null — режим поиска по папке (инструменты); null —
             // прикреплённые файлы. StartConversationAsync унифицирует оба и, на
             // нативном пути, делает диалог продолжаемым (возвращает conversationId).
+            // Протокол по модели: claude — нативно (Anthropic), остальные — OpenAI-совместимо.
+            var useOpenAiWire = !await adminService.UseAnthropicWireForAsync(model);
+
             var (agenticResult, conversationId) = await chatCompletionService.StartConversationAsync(
                 model,
                 systemPrompt,
@@ -293,6 +298,7 @@ public class RequestsController(
                 userId,
                 images,
                 BuildStatusReporter(userId),
+                useOpenAiWire,
                 cancellationToken
             );
             var resultText = agenticResult.ResultText;
